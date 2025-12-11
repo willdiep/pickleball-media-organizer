@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
+const VIDEO = "VIDEO";
+const PHOTO = "PHOTO";
+
 const TagBadge = ({ name }) => (
   <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
     {name}
@@ -9,31 +12,43 @@ const TagBadge = ({ name }) => (
 const MediaCard = ({ media, onSelect }) => {
   const tagNames = media.tags?.map((t) => t.name) ?? [];
   const description =
-    media.description && media.description.length > 200
-      ? `${media.description.slice(0, 200)}...`
+    media.description && media.description.length > 220
+      ? `${media.description.slice(0, 220)}...`
       : media.description;
+  const fileUrl =
+    media?.fileUrl ?? (media ? encodeURI(`file://${media.filepath}`) : "");
 
   return (
     <button
       onClick={() => onSelect(media)}
       className="group flex h-full flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-200 hover:shadow-md"
     >
-      {/* <div className="flex items-center justify-between gap-3"> */}
       <div className="w-full flex flex-col gap-3">
-        <div className="flex h-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 w-full">
-          {media.mediatype === "VIDEO" ? "🎬" : "📸"}
+        <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+          {media.mediatype === VIDEO ? (
+            <video
+              src={fileUrl}
+              muted
+              playsInline
+              preload="metadata"
+              className="h-40 w-full object-cover"
+            />
+          ) : (
+            <img
+              src={fileUrl}
+              alt={media.filename}
+              className="h-40 w-full object-cover bg-white"
+            />
+          )}
         </div>
         <div className="">
           <div className="text-sm font-semibold text-slate-900 break-all">
             {media.filename}
           </div>
-          {/* <div className="text-xs text-slate-500 truncate">
-            {media.filepath}
-          </div> */}
           {description ? (
-            <div className="text-sm text-slate-600">
+            <p className="text-sm text-slate-600">
               {description}
-            </div>
+            </p>
           ) : null}
         </div>
       </div>
@@ -46,10 +61,10 @@ const MediaCard = ({ media, onSelect }) => {
           </span>
         )}
       </div>
-      <div className="mt-3 flex items-center justify-between text-xs text-emerald-600 opacity-0 transition group-hover:opacity-100">
-        <span>View &amp; Tag</span>
-        {/* <span>{media.mediatype === "VIDEO" ? "Video" : "Photo"}</span> */}
-      </div>
+      {/* <div className="mt-3 flex items-center justify-between text-xs text-emerald-600 opacity-0 transition group-hover:opacity-100">
+        <span>View</span>
+        <span>{media.mediatype === "VIDEO" ? "Video" : "Photo"}</span>
+      </div> */}
     </button>
   );
 };
@@ -130,7 +145,7 @@ const MediaModal = ({ media, onClose, onSave }) => {
           {/* <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 p-4"> */}
           <div className="flex items-center justify-center rounded-2xl">
             <div className="flex items-center justify-center">
-              {media.mediatype === "PHOTO" ? (
+              {media.mediatype === PHOTO ? (
                 <img
                   src={fileUrl}
                   className="max-h-[75vh] w-auto max-w-full rounded-xl bg-white object-contain shadow-sm"
@@ -380,7 +395,8 @@ const App = () => {
             {/* <p className="text-xs uppercase tracking-wide text-slate-500">
               Main Gallery
             </p> */}
-            <h2 className="text-xl font-semibold text-slate-900">
+            {/* <h2 className="text-xl font-semibold text-slate-900"> */}
+            <h2 className="text-xl uppercase tracking-wide text-slate-500">
               Gallery
             </h2>
             {!hasBridge && (
@@ -394,7 +410,7 @@ const App = () => {
             disabled={isAdding}
             className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-60"
           >
-            <span className="text-lg">＋</span>
+            {/* <span className="text-lg">＋</span> */}
             {isAdding ? "Loading..." : "Add Folder"}
           </button>
         </header>
