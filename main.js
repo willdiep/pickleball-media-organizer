@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { PrismaClient, MediaType } from "@prisma/client";
 import crypto from "crypto";
 
@@ -25,13 +25,15 @@ const supportedPhotos = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
 
 const createWindow = async () => {
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 1080,
+    width: 2160,
+    height: 1280,
     backgroundColor: "#f8fafc",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.cjs"),
+      // Allow loading local file:// media while the renderer runs on http://localhost during dev
+      webSecurity: !isDev,
     },
   });
 
@@ -116,6 +118,7 @@ const ingestMediaFromDirectory = async (directory) => {
 
 const normalizeMedia = (media) => ({
   ...media,
+  fileUrl: pathToFileURL(media.filepath).href,
   tags: media.tags?.map((mt) => mt.tag) ?? [],
 });
 
@@ -162,6 +165,8 @@ const registerIpcHandlers = () => {
       include: { tags: { include: { tag: true } } },
     });
     if (!media) return null;
+    
+    console.log(normalizeMedia(media));
     return normalizeMedia(media);
   });
 
@@ -207,6 +212,18 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle("tags:list", async () => {
     return prisma.tag.findMany({ orderBy: { name: "asc" } });
+  });
+
+  ipcMain.handle("media:update-description", async (_event, payload) => {
+    const { mediaId, description } = payload;
+    const normalizedDescription =
+      typeof description === "string" ? description.trim() : null;
+    const media = await prisma.media.update({
+      where: { id: mediaId },
+      data: { description: normalizedDescription || null },
+      include: { tags: { include: { tag: true } } },
+    });
+    return { media: normalizeMedia(media) };
   });
 };
 

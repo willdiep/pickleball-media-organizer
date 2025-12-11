@@ -1,44 +1,55 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const TagBadge = ({ name }) => (
-  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-    <span className="h-2 w-2 rounded-full bg-emerald-400"></span>
+  <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
     {name}
   </span>
 );
 
-const MediaRow = ({ media, onSelect }) => {
+const MediaCard = ({ media, onSelect }) => {
   const tagNames = media.tags?.map((t) => t.name) ?? [];
+  const description =
+    media.description && media.description.length > 200
+      ? `${media.description.slice(0, 200)}...`
+      : media.description;
+
   return (
     <button
       onClick={() => onSelect(media)}
-      className="group flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-200 hover:shadow-md"
+      className="group flex h-full flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-200 hover:shadow-md"
     >
-      <div className="flex items-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+      {/* <div className="flex items-center justify-between gap-3"> */}
+      <div className="w-full flex flex-col gap-3">
+        <div className="flex h-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 w-full">
           {media.mediatype === "VIDEO" ? "🎬" : "📸"}
         </div>
-        <div>
-          <div className="text-sm font-semibold text-slate-900">
+        <div className="">
+          <div className="text-sm font-semibold text-slate-900 break-all">
             {media.filename}
           </div>
-          <div className="text-xs text-slate-500 truncate max-w-[460px]">
+          {/* <div className="text-xs text-slate-500 truncate">
             {media.filepath}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {tagNames.length ? (
-              tagNames.map((name) => <TagBadge key={name} name={name} />)
-            ) : (
-              <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                No tags
-              </span>
-            )}
-          </div>
+          </div> */}
+          {description ? (
+            <div className="text-sm text-slate-600">
+              {description}
+            </div>
+          ) : null}
         </div>
       </div>
-      <span className="text-xs font-medium text-emerald-600 opacity-0 transition group-hover:opacity-100">
-        View & Tag
-      </span>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {tagNames.length ? (
+          tagNames.map((name) => <TagBadge key={name} name={name} />)
+        ) : (
+          <span className="text-[11px] uppercase tracking-wide text-slate-400">
+            No tags
+          </span>
+        )}
+      </div>
+      <div className="mt-3 flex items-center justify-between text-xs text-emerald-600 opacity-0 transition group-hover:opacity-100">
+        <span>View &amp; Tag</span>
+        {/* <span>{media.mediatype === "VIDEO" ? "Video" : "Photo"}</span> */}
+      </div>
     </button>
   );
 };
@@ -46,13 +57,29 @@ const MediaRow = ({ media, onSelect }) => {
 const MediaModal = ({ media, onClose, onSave }) => {
   const [tagInput, setTagInput] = useState("");
   const [tagList, setTagList] = useState([]);
-  const fileUrl = media ? encodeURI(`file://${media.filepath}`) : "";
+  const [description, setDescription] = useState("");
+  const fileUrl =
+    media?.fileUrl ??
+    (media ? encodeURI(`file://${media.filepath}`) : "");
 
   useEffect(() => {
     if (media?.tags) {
       setTagList(media.tags.map((t) => t.name));
     }
+    setDescription(media?.description ?? "");
   }, [media]);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   const addTagFromInput = () => {
     const raw = tagInput.trim().toLowerCase();
@@ -75,13 +102,14 @@ const MediaModal = ({ media, onClose, onSave }) => {
   };
 
   const saveTags = async () => {
-    await onSave(media.id, tagList);
+    await onSave(media.id, tagList, description);
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+      {/* <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"> */}
+      <div className="flex w-auto max-w-[90vw] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl max-h-[90vh]">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <p className="text-xs uppercase tracking-wide text-slate-500">
@@ -98,21 +126,24 @@ const MediaModal = ({ media, onClose, onSave }) => {
             Close
           </button>
         </div>
-        <div className="grid flex-1 grid-cols-1 gap-6 overflow-auto p-6 md:grid-cols-2">
-          <div className="flex h-full flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            {media.mediatype === "PHOTO" ? (
-              <img
-                src={fileUrl}
-                className="h-full w-full rounded-xl object-contain bg-white"
-                alt={media.filename}
-              />
-            ) : (
-              <video
-                src={fileUrl}
-                controls
-                className="h-full w-full rounded-xl bg-black"
-              />
-            )}
+        <div className="grid grid-cols-1 items-start gap-6 overflow-auto p-6 md:grid-cols-[minmax(0,1fr)_320px]">
+          {/* <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 p-4"> */}
+          <div className="flex items-center justify-center rounded-2xl">
+            <div className="flex items-center justify-center">
+              {media.mediatype === "PHOTO" ? (
+                <img
+                  src={fileUrl}
+                  className="max-h-[75vh] w-auto max-w-full rounded-xl bg-white object-contain shadow-sm"
+                  alt={media.filename}
+                />
+              ) : (
+                <video
+                  src={fileUrl}
+                  controls
+                  className="max-h-[80vh] w-auto max-w-full rounded-xl bg-black object-contain shadow-sm"
+                />
+              )}
+            </div>
           </div>
           <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4">
             <div>
@@ -122,6 +153,17 @@ const MediaModal = ({ media, onClose, onSave }) => {
               <p className="break-all text-sm text-slate-800">
                 {media.filepath}
               </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Description
+              </p>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Add a description..."
+                className="min-h-[120px] resize-y rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+              />
             </div>
             <div className="flex flex-wrap gap-2">
               {tagList.map((tag) => (
@@ -170,7 +212,7 @@ const MediaModal = ({ media, onClose, onSave }) => {
                 onClick={saveTags}
                 className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
               >
-                Save Tags
+                Save Changes
               </button>
             </div>
           </div>
@@ -292,17 +334,36 @@ const App = () => {
     }
   };
 
-  const handleSaveTags = async (mediaId, tagList) => {
-    if (!window.electronApi?.updateTags) {
-      console.error("Electron bridge not available. Cannot save tags.");
+  const handleSaveMetadata = async (mediaId, tagList, description) => {
+    const canUpdateTags = typeof window.electronApi?.updateTags === "function";
+    const canUpdateDescription =
+      typeof window.electronApi?.updateDescription === "function";
+
+    if (!canUpdateTags && !canUpdateDescription) {
+      console.error("Electron bridge not available. Cannot save changes.");
       return;
     }
-    const result = await window.electronApi.updateTags(mediaId, tagList);
-    if (result?.media) {
-      setMedia((prev) =>
-        prev.map((m) => (m.id === mediaId ? result.media : m))
-      );
-      setTags(result.tags || tags);
+
+    try {
+      const tagResult = canUpdateTags
+        ? await window.electronApi.updateTags(mediaId, tagList)
+        : null;
+      const descriptionResult = canUpdateDescription
+        ? await window.electronApi.updateDescription(mediaId, description)
+        : null;
+
+      const latestMedia = descriptionResult?.media || tagResult?.media;
+      const updatedTags = tagResult?.tags || tags;
+
+      if (latestMedia) {
+        setMedia((prev) =>
+          prev.map((m) => (m.id === mediaId ? latestMedia : m))
+        );
+        setSelectedMedia(latestMedia);
+      }
+      setTags(updatedTags);
+    } catch (error) {
+      console.error("Failed to save changes", error);
     }
   };
 
@@ -359,9 +420,9 @@ const App = () => {
               </button>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {filteredMedia.map((item) => (
-                <MediaRow
+                <MediaCard
                   key={item.id}
                   media={item}
                   onSelect={(media) => setSelectedMedia(media)}
@@ -375,7 +436,7 @@ const App = () => {
         <MediaModal
           media={selectedMedia}
           onClose={() => setSelectedMedia(null)}
-          onSave={handleSaveTags}
+          onSave={handleSaveMetadata}
         />
       )}
     </div>

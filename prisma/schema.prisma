@@ -13,14 +13,15 @@ enum MediaType {
 }
 
 model Media {
-  id        Int        @id @default(autoincrement())
-  uuid      String     @unique
-  filename  String
-  filepath  String     @unique
-  mediatype MediaType
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
-  tags      MediaTag[]
+  id                  Int        @id @default(autoincrement())
+  uuid                String     @unique
+  filename            String
+  filepath            String     @unique
+  mediatype           MediaType
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
+  tags                MediaTag[]
+  description         String?
 }
 
 model Tag {

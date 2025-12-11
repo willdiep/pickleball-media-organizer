@@ -7,6 +7,7 @@ const api = {
   updateTags: (mediaId, tags) =>
     ipcRenderer.invoke("media:update-tags", { mediaId, tags }),
   listTags: () => ipcRenderer.invoke("tags:list"),
+  updateDescription: (mediaId, description) => ipcRenderer.invoke("media:update-description", {mediaId, description})
 };
 
 // Expose the IPC bridge into the renderer
