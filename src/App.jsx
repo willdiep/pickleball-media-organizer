@@ -12,8 +12,8 @@ const TagBadge = ({ name }) => (
 const MediaCard = ({ media, onSelect }) => {
   const tagNames = media.tags?.map((t) => t.name) ?? [];
   const description =
-    media.description && media.description.length > 220
-      ? `${media.description.slice(0, 220)}...`
+    media.description && media.description.length > 100
+      ? `${media.description.slice(0, 100)}...`
       : media.description;
   const fileUrl =
     media?.fileUrl ?? (media ? encodeURI(`file://${media.filepath}`) : "");
@@ -21,10 +21,10 @@ const MediaCard = ({ media, onSelect }) => {
   return (
     <button
       onClick={() => onSelect(media)}
-      className="group flex h-full flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-200 hover:shadow-md"
+      className="group h-full flex-col rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-[1px] hover:border-emerald-200 hover:shadow-md"
     >
       <div className="w-full flex flex-col gap-3">
-        <div className="w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+        <div className="w-full overflow-hidden rounded-t-xl border border-slate-200 bg-slate-100">
           {media.mediatype === VIDEO ? (
             <video
               src={fileUrl}
@@ -41,30 +41,30 @@ const MediaCard = ({ media, onSelect }) => {
             />
           )}
         </div>
-        <div className="">
+      </div>
+      <div className="p-4 flex flex-col justify-between h-44">
+        <div>
           <div className="text-sm font-semibold text-slate-900 break-all">
             {media.filename}
           </div>
           {description ? (
-            <p className="text-sm text-slate-600">
-              {description}
-            </p>
+            <p className="text-sm text-slate-600">{description}</p>
           ) : null}
         </div>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {tagNames.length ? (
-          tagNames.map((name) => <TagBadge key={name} name={name} />)
-        ) : (
-          <span className="text-[11px] uppercase tracking-wide text-slate-400">
-            No tags
-          </span>
-        )}
-      </div>
-      {/* <div className="mt-3 flex items-center justify-between text-xs text-emerald-600 opacity-0 transition group-hover:opacity-100">
+        <div className="mt-3 flex flex-wrap gap-2">
+          {tagNames.length ? (
+            tagNames.map((name) => <TagBadge key={name} name={name} />)
+          ) : (
+            <span className="text-[11px] uppercase tracking-wide text-slate-400">
+              No tags
+            </span>
+          )}
+        </div>
+        {/* <div className="mt-3 flex items-center justify-between text-xs text-emerald-600 opacity-0 transition group-hover:opacity-100">
         <span>View</span>
         <span>{media.mediatype === "VIDEO" ? "Video" : "Photo"}</span>
       </div> */}
+      </div>
     </button>
   );
 };
@@ -74,8 +74,7 @@ const MediaModal = ({ media, onClose, onSave }) => {
   const [tagList, setTagList] = useState([]);
   const [description, setDescription] = useState("");
   const fileUrl =
-    media?.fileUrl ??
-    (media ? encodeURI(`file://${media.filepath}`) : "");
+    media?.fileUrl ?? (media ? encodeURI(`file://${media.filepath}`) : "");
 
   useEffect(() => {
     if (media?.tags) {
@@ -177,7 +176,7 @@ const MediaModal = ({ media, onClose, onSave }) => {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Add a description..."
-                className="min-h-[120px] resize-y rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+                className="min-h-[450px] resize-y rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
               />
             </div>
             <div className="flex flex-wrap gap-2">
@@ -241,7 +240,9 @@ const Sidebar = ({ tags, selectedTag, onSelectTag }) => (
   <aside className="flex h-full w-64 flex-col border-r border-slate-200 bg-white/60 p-4 backdrop-blur">
     <div className="mb-6 flex items-center justify-between">
       <div>
-        <p className="text-xs uppercase tracking-wide text-slate-500">Library</p>
+        <p className="text-xs uppercase tracking-wide text-slate-500">
+          Library
+        </p>
         {/* <h1 className="text-xl font-bold text-slate-900">
           Pickleball Media
         </h1> */}
@@ -306,7 +307,9 @@ const App = () => {
     setIsLoading(true);
     try {
       if (!window.electronApi?.listMedia) {
-        console.warn("Electron bridge not available. Are you running in Electron?");
+        console.warn(
+          "Electron bridge not available. Are you running in Electron?"
+        );
         return;
       }
       const result = await window.electronApi.listMedia();
@@ -334,7 +337,9 @@ const App = () => {
     setIsAdding(true);
     try {
       if (!window.electronApi?.addFolder) {
-        console.error("Electron bridge not available. Run the app via Electron to add folders.");
+        console.error(
+          "Electron bridge not available. Run the app via Electron to add folders."
+        );
         return;
       }
       const result = await window.electronApi.addFolder();
@@ -401,7 +406,8 @@ const App = () => {
             </h2>
             {!hasBridge && (
               <p className="mt-1 text-xs text-amber-600">
-                Electron bridge not detected. Start the app via Electron to use native dialogs.
+                Electron bridge not detected. Start the app via Electron to use
+                native dialogs.
               </p>
             )}
           </div>
