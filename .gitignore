@@ -7,4 +7,4 @@ dist
 data/*.db
 data/*.db-journal
 prisma/generated
-prisma/data/pickleball.db
+prisma/data/database.db
