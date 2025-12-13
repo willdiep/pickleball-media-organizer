@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import VideoJS from "./VideoJS";
 
 const VIDEO = "VIDEO";
 const PHOTO = "PHOTO";
@@ -121,6 +122,43 @@ const MediaModal = ({ media, onClose, onSave }) => {
     onClose();
   };
 
+  const playerRef = useRef(null);
+
+  const videoJsOptions = {
+    // autoplay: true,
+    controls: true,
+    responsive: false,
+    fluid: false,
+    fill: true,
+    sources: [
+      {
+        src: fileUrl,
+        type: "video/mp4",
+      },
+    ],
+  };
+
+  // Explicit container sizing so the player can fill it without relying on Video.js fluid/aspect sizing
+  const videoContainerStyle = {
+    aspectRatio: "9 / 16",
+    height: "80vh",
+    maxHeight: "80vh",
+    width: "min(80vw, calc(80vh * 9 / 16))",
+  };
+
+  const handlePlayerReady = (player) => {
+    playerRef.current = player;
+
+    // You can handle player events here, for example:
+    player.on("waiting", () => {
+      console.log("player is waiting");
+    });
+
+    player.on("dispose", () => {
+      console.log("player will dispose");
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
       {/* <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"> */}
@@ -144,7 +182,7 @@ const MediaModal = ({ media, onClose, onSave }) => {
         <div className="grid grid-cols-1 items-start gap-6 overflow-auto p-6 md:grid-cols-[minmax(0,1fr)_320px]">
           {/* <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 p-4"> */}
           <div className="flex items-center justify-center rounded-2xl">
-            <div className="flex items-center justify-center">
+            <div className="flex w-full items-center justify-center">
               {media.mediatype === PHOTO ? (
                 <img
                   src={fileUrl}
@@ -152,11 +190,16 @@ const MediaModal = ({ media, onClose, onSave }) => {
                   alt={media.filename}
                 />
               ) : (
-                <video
-                  src={fileUrl}
-                  controls
-                  className="max-h-[80vh] w-auto max-w-full rounded-xl bg-black object-contain shadow-sm"
-                />
+                <div
+                  className="overflow-hidden rounded-xl bg-black shadow-sm"
+                  style={videoContainerStyle}
+                >
+                  <VideoJS
+                    options={videoJsOptions}
+                    onReady={handlePlayerReady}
+                    className="h-full w-full"
+                  />
+                </div>
               )}
             </div>
           </div>
