@@ -124,27 +124,33 @@ const MediaModal = ({ media, onClose, onSave }) => {
 
   const playerRef = useRef(null);
 
-  const videoJsOptions = {
-    // autoplay: true,
-    controls: true,
-    responsive: false,
-    fluid: false,
-    fill: true,
-    sources: [
-      {
-        src: fileUrl,
-        type: "video/mp4",
-      },
-    ],
-  };
+  const videoJsOptions = useMemo(
+    () => ({
+      // autoplay: true,
+      controls: true,
+      responsive: false,
+      fluid: false,
+      fill: true,
+      sources: [
+        {
+          src: fileUrl,
+          type: "video/mp4",
+        },
+      ],
+    }),
+    [fileUrl]
+  );
 
   // Explicit container sizing so the player can fill it without relying on Video.js fluid/aspect sizing
-  const videoContainerStyle = {
-    aspectRatio: "9 / 16",
-    height: "80vh",
-    maxHeight: "80vh",
-    width: "min(80vw, calc(80vh * 9 / 16))",
-  };
+  const videoContainerStyle = useMemo(
+    () => ({
+      aspectRatio: "9 / 16",
+      height: "80vh",
+      maxHeight: "80vh",
+      width: "min(80vw, calc(80vh * 9 / 16))",
+    }),
+    []
+  );
 
   const handlePlayerReady = (player) => {
     playerRef.current = player;
@@ -179,14 +185,14 @@ const MediaModal = ({ media, onClose, onSave }) => {
             Close
           </button>
         </div>
-        <div className="grid grid-cols-1 items-start gap-6 overflow-auto p-6 md:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid grid-cols-1 items-start gap-4 overflow-auto p-4 md:grid-cols-[minmax(0,1fr)_400px]">
           {/* <div className="flex items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 p-4"> */}
           <div className="flex items-center justify-center rounded-2xl">
             <div className="flex w-full items-center justify-center">
               {media.mediatype === PHOTO ? (
                 <img
                   src={fileUrl}
-                  className="max-h-[75vh] w-auto max-w-full rounded-xl bg-white object-contain shadow-sm"
+                  className="h-[80vh] w-full rounded-xl bg-white object-contain shadow-sm"
                   alt={media.filename}
                 />
               ) : (
