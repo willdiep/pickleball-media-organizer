@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import VideoJS from "./VideoJS";
 
-const MediaModal = ({ media, onClose, onSave }) => {
+const MediaModal = ({ media, onClose, onSave, onDelete }) => {
   const [tagInput, setTagInput] = useState("");
   const [tagList, setTagList] = useState([]);
   const [description, setDescription] = useState("");
   const fileUrl =
     media?.fileUrl ?? (media ? encodeURI(`file://${media.filepath}`) : "");
+
+  const mediaFilename = media.filename && media.filename.length >= 80
+      ? `${media.filename.slice(0, 80)}...`
+      : media.filename;
 
   useEffect(() => {
     if (media?.tags) {
@@ -104,7 +108,7 @@ const MediaModal = ({ media, onClose, onSave }) => {
               Preview
             </p>
             <h2 className="text-lg font-semibold text-slate-900">
-              {media.filename}
+              {mediaFilename}
             </h2>
           </div>
           <button
@@ -193,20 +197,32 @@ const MediaModal = ({ media, onClose, onSave }) => {
                 Add
               </button>
             </div>
-            <div className="mt-auto flex justify-end gap-2">
-              <button
-                onClick={onClose}
-                className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveTags}
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
-              >
-                Save Changes
-              </button>
-            </div>
+
+            <footer className="flex justify-between mt-auto">
+              <div>
+                <button
+                  onClick={onDelete}
+                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={onClose}
+                  className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveTags}
+                  className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </footer>
           </div>
         </div>
       </div>

@@ -225,6 +225,27 @@ const registerIpcHandlers = () => {
     });
     return { media: normalizeMedia(media) };
   });
+
+  ipcMain.handle("media:delete", async (_event, mediaId) => {
+    if (!mediaId) {
+      return { media: [], tags: [] };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.mediaTag.deleteMany({ where: { mediaId } });
+      await tx.media.delete({ where: { id: mediaId } });
+    });
+
+    const [media, tags] = await Promise.all([
+      prisma.media.findMany({
+        orderBy: { createdAt: "desc" },
+        include: { tags: { include: { tag: true } } },
+      }),
+      prisma.tag.findMany({ orderBy: { name: "asc" } }),
+    ]);
+
+    return { media: media.map(normalizeMedia), tags };
+  });
 };
 
 app.on("window-all-closed", () => {

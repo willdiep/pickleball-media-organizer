@@ -96,6 +96,23 @@ const App = () => {
     }
   };
 
+  const handleDeleteMedia = async () => {
+    if (!selectedMedia) return;
+    if (typeof window.electronApi?.deleteMedia !== "function") {
+      console.error("Electron bridge not available. Cannot delete media.");
+      return;
+    }
+
+    try {
+      const result = await window.electronApi.deleteMedia(selectedMedia.id);
+      if (result?.media) setMedia(result.media);
+      if (result?.tags) setTags(result.tags);
+      setSelectedMedia(null);
+    } catch (error) {
+      console.error("Failed to delete media", error);
+    }
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
       <Sidebar
@@ -168,6 +185,7 @@ const App = () => {
           media={selectedMedia}
           onClose={() => setSelectedMedia(null)}
           onSave={handleSaveMetadata}
+          onDelete={handleDeleteMedia}
         />
       )}
     </div>
