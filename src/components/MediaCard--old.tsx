@@ -1,9 +1,15 @@
-import TagBadge from "./TagBadge"
+import TagBadge from "@/components/TagBadge";
+import type { NormalizedMedia } from '@/types/media';
 
-const MediaCard = ({ media, onSelect }) => {
+interface MediaCardProps {
+  media: NormalizedMedia;
+  onSelect: (media: NormalizedMedia) => void;
+}
+
+const MediaCard = ({ media, onSelect }: MediaCardProps) => {
   const tagNames = media.tags?.map((t) => t.name) ?? [];
   const description =
-    media.description && media.description.length > 100
+    media.description && media.description.length >= 100
       ? `${media.description.slice(0, 100)}...`
       : media.description;
   const fileUrl =
@@ -52,10 +58,6 @@ const MediaCard = ({ media, onSelect }) => {
             </span>
           )}
         </div>
-        {/* <div className="mt-3 flex items-center justify-between text-xs text-emerald-600 opacity-0 transition group-hover:opacity-100">
-        <span>View</span>
-        <span>{media.mediatype === "VIDEO" ? "Video" : "Photo"}</span>
-      </div> */}
       </div>
     </button>
   );

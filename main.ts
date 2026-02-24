@@ -1,13 +1,15 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, IpcMainInvokeEvent } from "electron";
 import path from "path";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import { fileURLToPath, pathToFileURL } from "url";
-import { PrismaClient, MediaType } from "@prisma/client";
+import { PrismaClient, MediaType, Media, Tag } from "@prisma/client";
 import crypto from "crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Since main.js is compiled to dist-main/, we need to reference the project root
+const projectRoot = path.join(__dirname, "..");
 const isDev = process.env.NODE_ENV !== "production";
 
 // Ensure the database lives in a predictable workspace location unless overridden
@@ -23,7 +25,21 @@ const prisma = new PrismaClient();
 const supportedVideos = new Set([".mp4", ".mov", ".m4v", ".webm", ".avi"]);
 const supportedPhotos = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
 
-const createWindow = async () => {
+type MediaWithTags = Media & {
+  tags: Array<{ tag: Tag }>;
+};
+
+interface NormalizedMedia extends Omit<Media, 'tags'> {
+  fileUrl: string;
+  tags: Tag[];
+}
+
+interface IngestResult {
+  imported: number;
+  skipped: number;
+}
+
+const createWindow = async (): Promise<void> => {
   const mainWindow = new BrowserWindow({
     width: 2160,
     height: 1280,
@@ -31,7 +47,7 @@ const createWindow = async () => {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: path.join(__dirname, "preload.cjs"),
+      preload: path.join(projectRoot, "preload.cjs"),
       // Allow loading local file:// media while the renderer runs on http://localhost during dev
       webSecurity: !isDev,
     },
@@ -41,7 +57,7 @@ const createWindow = async () => {
     await mainWindow.loadURL("http://localhost:5173");
     mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
-    const indexPath = path.join(__dirname, "dist", "index.html");
+    const indexPath = path.join(projectRoot, "dist", "index.html");
     await mainWindow.loadFile(indexPath);
   }
 
@@ -51,9 +67,9 @@ const createWindow = async () => {
   });
 };
 
-const walkDirectory = async (dir) => {
-  const files = [];
-  let entries = [];
+const walkDirectory = async (dir: string): Promise<string[]> => {
+  const files: string[] = [];
+  let entries: fs.Dirent[] = [];
 
   try {
     entries = await fsPromises.readdir(dir, { withFileTypes: true });
@@ -75,14 +91,14 @@ const walkDirectory = async (dir) => {
   return files;
 };
 
-const inferMediaType = (filePath) => {
+const inferMediaType = (filePath: string): MediaType | null => {
   const ext = path.extname(filePath).toLowerCase();
   if (supportedVideos.has(ext)) return MediaType.VIDEO;
   if (supportedPhotos.has(ext)) return MediaType.PHOTO;
   return null;
 };
 
-const ingestMediaFromDirectory = async (directory) => {
+const ingestMediaFromDirectory = async (directory: string): Promise<IngestResult> => {
   const files = await walkDirectory(directory);
   let imported = 0;
   let skipped = 0;
@@ -116,13 +132,13 @@ const ingestMediaFromDirectory = async (directory) => {
   return { imported, skipped };
 };
 
-const normalizeMedia = (media) => ({
+const normalizeMedia = (media: MediaWithTags): NormalizedMedia => ({
   ...media,
   fileUrl: pathToFileURL(media.filepath).href,
   tags: media.tags?.map((mt) => mt.tag) ?? [],
 });
 
-const registerIpcHandlers = () => {
+const registerIpcHandlers = (): void => {
   ipcMain.handle("media:list", async () => {
     const [media, tags] = await Promise.all([
       prisma.media.findMany({
@@ -159,18 +175,18 @@ const registerIpcHandlers = () => {
     return { ...results, media: media.map(normalizeMedia), tags };
   });
 
-  ipcMain.handle("media:get", async (_event, mediaId) => {
+  ipcMain.handle("media:get", async (_event: IpcMainInvokeEvent, mediaId: number) => {
     const media = await prisma.media.findUnique({
       where: { id: mediaId },
       include: { tags: { include: { tag: true } } },
     });
     if (!media) return null;
-    
+
     console.log(normalizeMedia(media));
     return normalizeMedia(media);
   });
 
-  ipcMain.handle("media:update-tags", async (_event, payload) => {
+  ipcMain.handle("media:update-tags", async (_event: IpcMainInvokeEvent, payload: { mediaId: number; tags: string[] }) => {
     const { mediaId, tags } = payload;
     const tagNames = (tags || [])
       .map((t) => t.trim().toLowerCase())
@@ -207,14 +223,14 @@ const registerIpcHandlers = () => {
     });
     const tagsList = await prisma.tag.findMany({ orderBy: { name: "asc" } });
 
-    return { media: normalizeMedia(media), tags: tagsList };
+    return { media: media ? normalizeMedia(media) : null, tags: tagsList };
   });
 
   ipcMain.handle("tags:list", async () => {
     return prisma.tag.findMany({ orderBy: { name: "asc" } });
   });
 
-  ipcMain.handle("media:update-description", async (_event, payload) => {
+  ipcMain.handle("media:update-description", async (_event: IpcMainInvokeEvent, payload: { mediaId: number; description: string }) => {
     const { mediaId, description } = payload;
     const normalizedDescription =
       typeof description === "string" ? description.trim() : null;
@@ -226,7 +242,7 @@ const registerIpcHandlers = () => {
     return { media: normalizeMedia(media) };
   });
 
-  ipcMain.handle("media:delete", async (_event, mediaId) => {
+  ipcMain.handle("media:delete", async (_event: IpcMainInvokeEvent, mediaId: number) => {
     if (!mediaId) {
       return { media: [], tags: [] };
     }

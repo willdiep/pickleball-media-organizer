@@ -1,18 +1,41 @@
-import React from 'react';
+import {useEffect, useRef } from 'react';
 import videojs from 'video.js';
+import type Player from 'video.js/dist/types/player';
 import 'video.js/dist/video-js.css';
 import 'videojs-hotkeys';
 
-export const VideoJS = (props) => {
-  const videoRef = React.useRef(null);
-  const playerRef = React.useRef(null);
-  const {options, onReady, className} = props;
+interface VideoJSOptions {
+  autoplay?: boolean;
+  controls?: boolean;
+  responsive?: boolean;
+  fluid?: boolean;
+  fill?: boolean;
+  sources?: Array<{
+    src: string;
+    type: string;
+  }>;
+}
 
-  React.useEffect(() => {
+interface VideoJSProps {
+  options: VideoJSOptions;
+  onReady?: (player: Player) => void;
+  className?: string;
+}
 
+// Extend Player type for hotkeys plugin
+interface PlayerWithHotkeys extends Player {
+  hotkeys?: (options: { seekStep: number }) => void;
+}
+
+export const VideoJS = (props: VideoJSProps) => {
+  const videoRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<Player | null>(null);
+  const { options, onReady, className } = props;
+
+  useEffect(() => {
     // Make sure Video.js player is only initialized once
     if (!playerRef.current) {
-      // The Video.js player needs to be _inside_ the component el for React 18 Strict Mode. 
+      // The Video.js player needs to be _inside_ the component el for React 18 Strict Mode.
       const videoElement = document.createElement("video-js");
 
       videoElement.classList.add('video-js', 'vjs-big-play-centered');
@@ -24,14 +47,15 @@ export const VideoJS = (props) => {
           .filter(Boolean)
           .forEach((cls) => videoElement.classList.add(cls));
       }
-      videoRef.current.appendChild(videoElement);
+      videoRef.current?.appendChild(videoElement);
 
       const player = playerRef.current = videojs(videoElement, options, () => {
         videojs.log('player is ready');
 
         // Enable keyboard hotkeys (e.g., arrow key seeking)
-        if (typeof player.hotkeys === 'function') {
-          player.hotkeys({
+        const playerWithHotkeys = player as PlayerWithHotkeys;
+        if (typeof playerWithHotkeys.hotkeys === 'function') {
+          playerWithHotkeys.hotkeys({
             seekStep: 0.1,
           });
         }
@@ -48,15 +72,15 @@ export const VideoJS = (props) => {
         className
           .split(' ')
           .filter(Boolean)
-          .forEach((cls) => player.el().classList.add(cls));
+          .forEach((cls) => player.el()?.classList.add(cls));
       }
-      player.autoplay(options.autoplay);
-      player.src(options.sources);
+      player.autoplay(options.autoplay ?? false);
+      player.src(options.sources ?? []);
     }
-  }, [options, className]);
+  }, [options, className, onReady]);
 
   // Dispose the Video.js player when the functional component unmounts
-  React.useEffect(() => {
+useEffect(() => {
     const player = playerRef.current;
 
     return () => {
@@ -65,7 +89,7 @@ export const VideoJS = (props) => {
         playerRef.current = null;
       }
     };
-  }, [playerRef]);
+  }, []);
 
   return (
     <div
@@ -76,6 +100,6 @@ export const VideoJS = (props) => {
       <div ref={videoRef} className="h-full w-full" />
     </div>
   );
-}
+};
 
 export default VideoJS;

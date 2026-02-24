@@ -1,13 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import Sidebar from "./Sidebar"
-import MediaCard from "./MediaCard"
-import MediaModal from "./MediaModal"
+
+import Sidebar from "@/components/Sidebar";
+import MediaCard from "@/components/MediaCard";
+import MediaModal from "@/components/MediaModal";
+
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
+
+import type { NormalizedMedia, Tag } from "./types/media";
 
 const App = () => {
-  const [media, setMedia] = useState([]);
-  const [tags, setTags] = useState([]);
+  const [media, setMedia] = useState<NormalizedMedia[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTag, setSelectedTag] = useState("all");
-  const [selectedMedia, setSelectedMedia] = useState(null);
+  const [selectedMedia, setSelectedMedia] = useState<NormalizedMedia | null>(
+    null
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const hasBridge = Boolean(window?.electronApi);
@@ -63,7 +71,11 @@ const App = () => {
     }
   };
 
-  const handleSaveMetadata = async (mediaId, tagList, description) => {
+  const handleSaveMetadata = async (
+    mediaId: number,
+    tagList: string[],
+    description: string
+  ) => {
     const canUpdateTags = typeof window.electronApi?.updateTags === "function";
     const canUpdateDescription =
       typeof window.electronApi?.updateDescription === "function";
@@ -75,10 +87,10 @@ const App = () => {
 
     try {
       const tagResult = canUpdateTags
-        ? await window.electronApi.updateTags(mediaId, tagList)
+        ? await window.electronApi!.updateTags(mediaId, tagList)
         : null;
       const descriptionResult = canUpdateDescription
-        ? await window.electronApi.updateDescription(mediaId, description)
+        ? await window.electronApi!.updateDescription(mediaId, description)
         : null;
 
       const latestMedia = descriptionResult?.media || tagResult?.media;
@@ -123,10 +135,6 @@ const App = () => {
       <main className="flex flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-200 bg-white/70 px-6 py-4 backdrop-blur">
           <div>
-            {/* <p className="text-xs uppercase tracking-wide text-slate-500">
-              Main Gallery
-            </p> */}
-            {/* <h2 className="text-xl font-semibold text-slate-900"> */}
             <h2 className="text-xl uppercase tracking-wide text-slate-500">
               Gallery
             </h2>
@@ -137,14 +145,20 @@ const App = () => {
               </p>
             )}
           </div>
-          <button
+          <Button
             onClick={handleAddFolder}
             disabled={isAdding}
-            className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-60"
+            // className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-60"
+            className="bg-emerald-600 hover:bg-emerald-700"
           >
-            {/* <span className="text-lg">＋</span> */}
-            {isAdding ? "Loading..." : "Add Folder"}
-          </button>
+            {isAdding ? (
+              <span className="flex gap-2">
+                <Spinner /> Loading
+              </span>
+            ) : (
+              "Add Folder"
+            )}
+          </Button>
         </header>
         <section className="flex-1 overflow-auto px-6 py-4 scrollbar-light">
           {isLoading ? (
