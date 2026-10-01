@@ -7,5 +7,3 @@ dist-main
 .env
 data/*.db
 data/*.db-journal
-prisma/generated
-prisma/data/database.db

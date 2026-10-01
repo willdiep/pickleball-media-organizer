@@ -441,6 +441,8 @@ const fileUrl = convertFileSrc(media.filepath);
 
 `MediaCard` and `MediaModal` already consume `fileUrl`. Keep that field so the components do not learn about Tauri.
 
+On Linux, WebKitGTK plays `file://` and `http://` video, but its GStreamer media pipeline does not load the `asset://` custom protocol (images through that protocol are fine). Videos therefore use `http://127.0.0.1:17421/media?path=...`, a loopback server that only serves files under folders already imported into the library. Photos stay on `convertFileSrc`. `.mp4`, `.webm`, `.mov`, and `.avi` play when GStreamer has `gstreamer1.0-libav` (and plugins-good for VP8/WebM).
+
 External links, if any are opened later, go through `@tauri-apps/plugin-shell` `open`. The current main process uses `shell.openExternal` for `window.open`.
 
 ### 6. Remove Electron and Prisma

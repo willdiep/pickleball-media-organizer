@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { For, Show } from "solid-js";
 
 import {
@@ -23,7 +24,7 @@ function MediaCard(props: MediaCardProps) {
     return text.length >= 100 ? `${text.slice(0, 100)}...` : text;
   };
   const fileUrl = () =>
-    props.media.fileUrl ?? encodeURI(`file://${props.media.filepath}`);
+    props.media.fileUrl || convertFileSrc(props.media.filepath);
 
   return (
     <Card

@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
@@ -25,6 +26,21 @@ interface MediaModalProps {
   onDelete: () => Promise<void>;
 }
 
+function videoContentType(filename: string): string {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "webm":
+      return "video/webm";
+    case "mov":
+    case "m4v":
+      return "video/quicktime";
+    case "avi":
+      return "video/x-msvideo";
+    default:
+      return "video/mp4";
+  }
+}
+
 const videoContainerStyle = {
   "aspect-ratio": "9 / 16",
   height: "90vh",
@@ -38,7 +54,7 @@ const MediaModal = (props: MediaModalProps) => {
   const [description, setDescription] = createSignal("");
 
   const fileUrl = () =>
-    props.media.fileUrl ?? encodeURI(`file://${props.media.filepath}`);
+    props.media.fileUrl || convertFileSrc(props.media.filepath);
 
   const mediaFilename = () =>
     props.media.filename && props.media.filename.length >= 80
@@ -97,7 +113,7 @@ const MediaModal = (props: MediaModalProps) => {
     sources: [
       {
         src: fileUrl(),
-        type: "video/mp4",
+        type: videoContentType(props.media.filename),
       },
     ],
   }));

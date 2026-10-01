@@ -6,6 +6,7 @@ import MediaModal from "@/components/MediaModal";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import * as mediaApi from "@/lib/media-api";
 
 import type { NormalizedMedia, Tag } from "./types/media";
 
@@ -17,22 +18,18 @@ const App = () => {
     createSignal<NormalizedMedia | null>(null);
   const [isLoading, setIsLoading] = createSignal(false);
   const [isAdding, setIsAdding] = createSignal(false);
-  const hasBridge = Boolean(window?.electronApi);
+  const [loadError, setLoadError] = createSignal<string | null>(null);
 
   const loadMedia = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
-      if (!window.electronApi?.listMedia) {
-        console.warn(
-          "Electron bridge not available. Are you running in Electron?"
-        );
-        return;
-      }
-      const result = await window.electronApi.listMedia();
+      const result = await mediaApi.listMedia();
       setMedia(result.media || []);
       setTags(result.tags || []);
     } catch (error) {
       console.error("Failed to load media", error);
+      setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsLoading(false);
     }
@@ -54,13 +51,7 @@ const App = () => {
   const handleAddFolder = async () => {
     setIsAdding(true);
     try {
-      if (!window.electronApi?.addFolder) {
-        console.error(
-          "Electron bridge not available. Run the app via Electron to add folders."
-        );
-        return;
-      }
-      const result = await window.electronApi.addFolder();
+      const result = await mediaApi.addFolder();
       if (result.media) {
         setMedia(result.media);
         setTags(result.tags || tags());
@@ -77,22 +68,12 @@ const App = () => {
     tagList: string[],
     description: string
   ) => {
-    const canUpdateTags = typeof window.electronApi?.updateTags === "function";
-    const canUpdateDescription =
-      typeof window.electronApi?.updateDescription === "function";
-
-    if (!canUpdateTags && !canUpdateDescription) {
-      console.error("Electron bridge not available. Cannot save changes.");
-      return;
-    }
-
     try {
-      const tagResult = canUpdateTags
-        ? await window.electronApi!.updateTags(mediaId, tagList)
-        : null;
-      const descriptionResult = canUpdateDescription
-        ? await window.electronApi!.updateDescription(mediaId, description)
-        : null;
+      const tagResult = await mediaApi.updateTags(mediaId, tagList);
+      const descriptionResult = await mediaApi.updateDescription(
+        mediaId,
+        description
+      );
 
       const latestMedia = descriptionResult?.media || tagResult?.media;
       const updatedTags = tagResult?.tags || tags();
@@ -112,13 +93,9 @@ const App = () => {
   const handleDeleteMedia = async () => {
     const current = selectedMedia();
     if (!current) return;
-    if (typeof window.electronApi?.deleteMedia !== "function") {
-      console.error("Electron bridge not available. Cannot delete media.");
-      return;
-    }
 
     try {
-      const result = await window.electronApi.deleteMedia(current.id);
+      const result = await mediaApi.deleteMedia(current.id);
       if (result?.media) setMedia(result.media);
       if (result?.tags) setTags(result.tags);
       setSelectedMedia(null);
@@ -140,11 +117,8 @@ const App = () => {
             <h2 class="text-xl uppercase tracking-wide text-slate-500">
               Gallery
             </h2>
-            <Show when={!hasBridge}>
-              <p class="mt-1 text-xs text-amber-600">
-                Electron bridge not detected. Start the app via Electron to use
-                native dialogs.
-              </p>
+            <Show when={loadError()}>
+              <p class="mt-1 text-xs text-red-600">{loadError()}</p>
             </Show>
           </div>
           <Button
