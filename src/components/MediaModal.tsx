@@ -1,18 +1,15 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  useRef,
-  useCallback,
-  KeyboardEvent,
-} from "react";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import type { JSX } from "solid-js";
 
 import VideoJS from "@/components/VideoJS";
 
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input"
+import {
+  TextField,
+  TextFieldInput,
+  TextFieldLabel,
+  TextFieldTextArea,
+} from "@/components/ui/text-field";
 
 import type Player from "video.js/dist/types/player";
 import type { NormalizedMedia } from "@/types/media";
@@ -28,47 +25,55 @@ interface MediaModalProps {
   onDelete: () => Promise<void>;
 }
 
-const MediaModal = ({ media, onClose, onSave, onDelete }: MediaModalProps) => {
-  const [tagInput, setTagInput] = useState("");
-  const [tagList, setTagList] = useState<string[]>([]);
-  const [description, setDescription] = useState("");
-  const fileUrl =
-    media?.fileUrl ?? (media ? encodeURI(`file://${media.filepath}`) : "");
+const videoContainerStyle = {
+  "aspect-ratio": "9 / 16",
+  height: "90vh",
+  "max-height": "90vh",
+  "max-width": "min(90vw, calc(90vh * 9 / 16))",
+};
 
-  const mediaFilename =
-    media.filename && media.filename.length >= 80
-      ? `${media.filename.slice(0, 80)}...`
-      : media.filename;
+const MediaModal = (props: MediaModalProps) => {
+  const [tagInput, setTagInput] = createSignal("");
+  const [tagList, setTagList] = createSignal<string[]>([]);
+  const [description, setDescription] = createSignal("");
 
-  useEffect(() => {
-    if (media?.tags) {
-      setTagList(media.tags.map((t) => t.name));
-    }
-    setDescription(media?.description ?? "");
-  }, [media]);
+  const fileUrl = () =>
+    props.media.fileUrl ?? encodeURI(`file://${props.media.filepath}`);
 
-  useEffect(() => {
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+  const mediaFilename = () =>
+    props.media.filename && props.media.filename.length >= 80
+      ? `${props.media.filename.slice(0, 80)}...`
+      : props.media.filename;
+
+  createEffect(() => {
+    setTagList(props.media.tags?.map((tag) => tag.name) ?? []);
+    setDescription(props.media.description ?? "");
+  });
+
+  onMount(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        props.onClose();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+    onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+  });
 
   const addTagFromInput = () => {
-    const raw = tagInput.trim().toLowerCase();
+    const raw = tagInput().trim().toLowerCase();
     if (!raw) return;
-    if (!tagList.includes(raw)) {
-      setTagList([...tagList, raw]);
+    if (!tagList().includes(raw)) {
+      setTagList([...tagList(), raw]);
     }
     setTagInput("");
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown: JSX.EventHandler<HTMLInputElement, KeyboardEvent> = (
+    event
+  ) => {
     if (event.key === "Enter" || event.key === ",") {
       event.preventDefault();
       addTagFromInput();
@@ -76,198 +81,163 @@ const MediaModal = ({ media, onClose, onSave, onDelete }: MediaModalProps) => {
   };
 
   const removeTag = (tag: string) => {
-    setTagList(tagList.filter((t) => t !== tag));
+    setTagList(tagList().filter((item) => item !== tag));
   };
 
   const saveTags = async () => {
-    await onSave(media.id, tagList, description);
-    onClose();
+    await props.onSave(props.media.id, tagList(), description());
+    props.onClose();
   };
 
-  const playerRef = useRef<Player | null>(null);
+  const videoJsOptions = createMemo(() => ({
+    controls: true,
+    responsive: false,
+    fluid: false,
+    fill: true,
+    sources: [
+      {
+        src: fileUrl(),
+        type: "video/mp4",
+      },
+    ],
+  }));
 
-  const videoJsOptions = useMemo(
-    () => ({
-      controls: true,
-      responsive: false,
-      fluid: false,
-      fill: true,
-      sources: [
-        {
-          src: fileUrl,
-          type: "video/mp4",
-        },
-      ],
-    }),
-    [fileUrl]
-  );
-
-  // Explicit container sizing so the player can fill it without relying on Video.js fluid/aspect sizing
-  const videoContainerStyle = useMemo(
-    () => ({
-      aspectRatio: "9 / 16",
-      height: "90vh",
-      maxHeight: "90vh",
-      maxWidth: "min(90vw, calc(90vh * 9 / 16))",
-    }),
-    []
-  );
-
-  const handlePlayerReady = useCallback((player: Player) => {
-    playerRef.current = player;
-
-    // You can handle player events here, for example:
-    player.on("waiting", () => {
+  const handlePlayerReady = (instance: Player) => {
+    instance.on("waiting", () => {
       console.log("player is waiting");
     });
-
-    player.on("dispose", () => {
+    instance.on("dispose", () => {
       console.log("player will dispose");
     });
-  }, []);
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="flex w-auto max-w-[90vw] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl max-h-screen">
-        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+      <div class="flex max-h-screen w-auto max-w-[90vw] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <header class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
-            <Label className="text-xs uppercase tracking-wide text-slate-500">
+            <p class="text-xs uppercase tracking-wide text-slate-500">
               Preview
-            </Label>
-            <h2 className="text-lg text-slate-900">
-              {mediaFilename}
-            </h2>
+            </p>
+            <h2 class="text-lg text-slate-900">{mediaFilename()}</h2>
           </div>
           <Button
-            onClick={onClose}
-            className="bg-slate-100 px-3 py-2 text-sm text-slate-600 hover:bg-slate-200"
+            onClick={() => props.onClose()}
+            class="bg-slate-100 px-3 py-2 text-sm text-slate-600 hover:bg-slate-200"
           >
             Close
           </Button>
         </header>
-        <div className="grid grid-cols-1 items-start gap-4 overflow-auto md:grid-cols-[minmax(0,1fr)_400px]">
-          <div className="flex items-center justify-center rounded-2xl">
-            <div className="flex w-full items-center justify-center">
-              {media.mediatype === "PHOTO" ? (
+        <div class="grid grid-cols-1 items-start gap-4 overflow-auto md:grid-cols-[minmax(0,1fr)_400px]">
+          <div class="flex items-center justify-center rounded-2xl">
+            <div class="flex w-full items-center justify-center">
+              <Show
+                when={props.media.mediatype === "PHOTO"}
+                fallback={
+                  <div
+                    class="cursor-pointer overflow-hidden bg-black shadow-sm"
+                    style={videoContainerStyle}
+                  >
+                    <VideoJS
+                      options={videoJsOptions()}
+                      onReady={handlePlayerReady}
+                      class="h-full w-full"
+                    />
+                  </div>
+                }
+              >
                 <img
-                  src={fileUrl}
-                  className="h-[80vh] w-full bg-white object-contain shadow-sm"
-                  alt={media.filename}
+                  src={fileUrl()}
+                  class="h-[80vh] w-full bg-white object-contain shadow-sm"
+                  alt={props.media.filename}
                 />
-              ) : (
-                <div
-                  className="overflow-hidden bg-black shadow-sm cursor-pointer"
-                  style={videoContainerStyle}
-                >
-                  <VideoJS
-                    options={videoJsOptions}
-                    onReady={handlePlayerReady}
-                    className="h-full w-full"
-                  />
-                </div>
-              )}
+              </Show>
             </div>
           </div>
-          <div className="flex flex-col gap-6 rounded-2xl bg-white py-4 pr-4 h-full">
-            <div className="grid gap-2 w-full">
-              <Label className="text-xs uppercase tracking-wide text-slate-500">
+          <div class="flex h-full flex-col gap-6 rounded-2xl bg-white py-4 pr-4">
+            <div class="grid w-full gap-2">
+              <p class="text-xs uppercase tracking-wide text-slate-500">
                 Filepath
-              </Label>
-              <p className="break-all text-sm text-slate-800">
-                {media.filepath}
+              </p>
+              <p class="break-all text-sm text-slate-800">
+                {props.media.filepath}
               </p>
             </div>
 
-            <section className="grid w-full gap-2">
-              <Label
-                className="text-xs uppercase tracking-wide text-slate-500"
-                htmlFor="description"
-              >
+            <TextField
+              class="grid w-full gap-2"
+              value={description()}
+              onChange={setDescription}
+            >
+              <TextFieldLabel class="text-xs uppercase tracking-wide text-slate-500">
                 Description
-              </Label>
-              <Textarea
+              </TextFieldLabel>
+              <TextFieldTextArea
                 placeholder="Add a description"
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="h-40 focus:border-emerald-300 focus:ring-1 focus:ring-emerald-100"
+                class="h-40 focus:border-emerald-300 focus:ring-1 focus:ring-emerald-100"
               />
-            </section>
+            </TextField>
 
-            <section className="grid w-full gap-4">
-              <Label
-                className="text-xs uppercase tracking-wide text-slate-500"
-                htmlFor="description"
-              >
-                TAGS
-              </Label>
-              <div className="flex flex-wrap gap-2">
-                {tagList.map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
-                  >
-                    {tag}
-                    <button
-                      onClick={() => removeTag(tag)}
-                      className="text-xs text-emerald-700 hover:text-emerald-900"
-                    >
-                      ✕
-                    </button>
-                  </span>
-                ))}
-                {!tagList.length && (
-                  <span className="text-[11px] uppercase tracking-wide text-slate-400">
+            <section class="grid w-full gap-4">
+              <p class="text-xs uppercase tracking-wide text-slate-500">Tags</p>
+              <div class="flex flex-wrap gap-2">
+                <For each={tagList()}>
+                  {(tag) => (
+                    <span class="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                      {tag}
+                      <button
+                        onClick={() => removeTag(tag)}
+                        class="text-xs text-emerald-700 hover:text-emerald-900"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  )}
+                </For>
+                <Show when={tagList().length === 0}>
+                  <span class="text-[11px] uppercase tracking-wide text-slate-400">
                     No tags yet
                   </span>
-                )}
+                </Show>
               </div>
-              <div className="flex items-center gap-2">
-                {/* <input
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Add tag (press Enter or comma)"
-                  className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
-                /> */}
-                <Input
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Add tag (press Enter or comma)"
-                  className="focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
-                />
+              <div class="flex items-center gap-2">
+                <TextField
+                  class="flex-1"
+                  value={tagInput()}
+                  onChange={setTagInput}
+                >
+                  <TextFieldInput
+                    placeholder="Add tag (press Enter or comma)"
+                    onKeyDown={handleKeyDown}
+                    class="focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </TextField>
                 <Button
                   onClick={addTagFromInput}
-                  className="bg-emerald-500 text-white shadow-sm hover:bg-emerald-600"
+                  class="bg-emerald-500 text-white shadow-sm hover:bg-emerald-600"
                 >
                   Add
                 </Button>
               </div>
             </section>
 
-            <footer className="flex justify-between mt-auto">
+            <footer class="mt-auto flex justify-between">
               <div>
-                <Button
-                  onClick={onDelete}
-                  variant="destructive"
-                  className=""
-                >
+                <Button onClick={() => props.onDelete()} variant="destructive">
                   Delete
                 </Button>
               </div>
-
-              <div className="flex gap-2">
+              <div class="flex gap-2">
                 <Button
-                  onClick={onClose}
+                  onClick={() => props.onClose()}
                   variant="outline"
-                  className="px-4 py-2 text-sm"
+                  class="px-4 py-2 text-sm"
                 >
                   Cancel
                 </Button>
                 <Button
                   onClick={saveTags}
-                  className="bg-emerald-600 px-4 py-2 text-sm text-white shadow-sm hover:bg-emerald-700"
+                  class="bg-emerald-600 px-4 py-2 text-sm text-white shadow-sm hover:bg-emerald-700"
                 >
                   Save Changes
                 </Button>

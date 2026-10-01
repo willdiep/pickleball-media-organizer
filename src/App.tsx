@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 
 import Sidebar from "@/components/Sidebar";
 import MediaCard from "@/components/MediaCard";
@@ -10,14 +10,13 @@ import { Spinner } from "@/components/ui/spinner";
 import type { NormalizedMedia, Tag } from "./types/media";
 
 const App = () => {
-  const [media, setMedia] = useState<NormalizedMedia[]>([]);
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [selectedTag, setSelectedTag] = useState("all");
-  const [selectedMedia, setSelectedMedia] = useState<NormalizedMedia | null>(
-    null
-  );
-  const [isLoading, setIsLoading] = useState(false);
-  const [isAdding, setIsAdding] = useState(false);
+  const [media, setMedia] = createSignal<NormalizedMedia[]>([]);
+  const [tags, setTags] = createSignal<Tag[]>([]);
+  const [selectedTag, setSelectedTag] = createSignal("all");
+  const [selectedMedia, setSelectedMedia] =
+    createSignal<NormalizedMedia | null>(null);
+  const [isLoading, setIsLoading] = createSignal(false);
+  const [isAdding, setIsAdding] = createSignal(false);
   const hasBridge = Boolean(window?.electronApi);
 
   const loadMedia = async () => {
@@ -39,16 +38,18 @@ const App = () => {
     }
   };
 
-  useEffect(() => {
-    loadMedia();
-  }, []);
+  onMount(() => {
+    void loadMedia();
+  });
 
-  const filteredMedia = useMemo(() => {
-    if (selectedTag === "all") return media;
-    return media.filter((item) =>
-      item.tags?.some((tag) => tag.name === selectedTag)
+  const filteredMedia = createMemo(() => {
+    const tag = selectedTag();
+    const items = media();
+    if (tag === "all") return items;
+    return items.filter((item) =>
+      item.tags?.some((itemTag) => itemTag.name === tag)
     );
-  }, [media, selectedTag]);
+  });
 
   const handleAddFolder = async () => {
     setIsAdding(true);
@@ -62,7 +63,7 @@ const App = () => {
       const result = await window.electronApi.addFolder();
       if (result.media) {
         setMedia(result.media);
-        setTags(result.tags || tags);
+        setTags(result.tags || tags());
       }
     } catch (error) {
       console.error("Failed to add folder", error);
@@ -94,11 +95,11 @@ const App = () => {
         : null;
 
       const latestMedia = descriptionResult?.media || tagResult?.media;
-      const updatedTags = tagResult?.tags || tags;
+      const updatedTags = tagResult?.tags || tags();
 
       if (latestMedia) {
         setMedia((prev) =>
-          prev.map((m) => (m.id === mediaId ? latestMedia : m))
+          prev.map((item) => (item.id === mediaId ? latestMedia : item))
         );
         setSelectedMedia(latestMedia);
       }
@@ -109,14 +110,15 @@ const App = () => {
   };
 
   const handleDeleteMedia = async () => {
-    if (!selectedMedia) return;
+    const current = selectedMedia();
+    if (!current) return;
     if (typeof window.electronApi?.deleteMedia !== "function") {
       console.error("Electron bridge not available. Cannot delete media.");
       return;
     }
 
     try {
-      const result = await window.electronApi.deleteMedia(selectedMedia.id);
+      const result = await window.electronApi.deleteMedia(current.id);
       if (result?.media) setMedia(result.media);
       if (result?.tags) setTags(result.tags);
       setSelectedMedia(null);
@@ -126,82 +128,91 @@ const App = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
+    <div class="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
       <Sidebar
-        tags={tags}
-        selectedTag={selectedTag}
+        tags={tags()}
+        selectedTag={selectedTag()}
         onSelectTag={setSelectedTag}
       />
-      <main className="flex flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white/70 px-6 py-4 backdrop-blur">
+      <main class="flex flex-1 flex-col">
+        <header class="flex items-center justify-between border-b border-slate-200 bg-white/70 px-6 py-4 backdrop-blur">
           <div>
-            <h2 className="text-xl uppercase tracking-wide text-slate-500">
+            <h2 class="text-xl uppercase tracking-wide text-slate-500">
               Gallery
             </h2>
-            {!hasBridge && (
-              <p className="mt-1 text-xs text-amber-600">
+            <Show when={!hasBridge}>
+              <p class="mt-1 text-xs text-amber-600">
                 Electron bridge not detected. Start the app via Electron to use
                 native dialogs.
               </p>
-            )}
+            </Show>
           </div>
           <Button
             onClick={handleAddFolder}
-            disabled={isAdding}
-            // className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-60"
-            className="bg-emerald-600 hover:bg-emerald-700"
+            disabled={isAdding()}
+            class="bg-emerald-600 hover:bg-emerald-700"
           >
-            {isAdding ? (
-              <span className="flex gap-2">
+            <Show
+              when={isAdding()}
+              fallback="Add Folder"
+            >
+              <span class="flex gap-2">
                 <Spinner /> Loading
               </span>
-            ) : (
-              "Add Folder"
-            )}
+            </Show>
           </Button>
         </header>
-        <section className="flex-1 overflow-auto px-6 py-4 scrollbar-light">
-          {isLoading ? (
-            <div className="mt-10 text-center text-slate-500">
-              Loading media...
-            </div>
-          ) : filteredMedia.length === 0 ? (
-            <div className="mt-10 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-white py-10">
-              <div className="text-3xl">🟢</div>
-              <p className="text-sm font-semibold text-slate-700">
-                No media found
-              </p>
-              <p className="text-sm text-slate-500">
-                Import a folder to start organizing your pickleball highlights.
-              </p>
-              <button
-                onClick={handleAddFolder}
-                className="mt-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
-              >
-                Add Folder
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {filteredMedia.map((item) => (
-                <MediaCard
-                  key={item.id}
-                  media={item}
-                  onSelect={(media) => setSelectedMedia(media)}
-                />
-              ))}
-            </div>
-          )}
+        <section class="scrollbar-light flex-1 overflow-auto px-6 py-4">
+          <Show
+            when={!isLoading()}
+            fallback={
+              <div class="mt-10 text-center text-slate-500">
+                Loading media...
+              </div>
+            }
+          >
+            <Show
+              when={filteredMedia().length > 0}
+              fallback={
+                <div class="mt-10 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-white py-10">
+                  <div class="text-3xl">🟢</div>
+                  <p class="text-sm font-semibold text-slate-700">
+                    No media found
+                  </p>
+                  <p class="text-sm text-slate-500">
+                    Import a folder to start organizing your pickleball
+                    highlights.
+                  </p>
+                  <button
+                    onClick={handleAddFolder}
+                    class="mt-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                  >
+                    Add Folder
+                  </button>
+                </div>
+              }
+            >
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <For each={filteredMedia()}>
+                  {(item) => (
+                    <MediaCard media={item} onSelect={setSelectedMedia} />
+                  )}
+                </For>
+              </div>
+            </Show>
+          </Show>
         </section>
       </main>
-      {selectedMedia && (
-        <MediaModal
-          media={selectedMedia}
-          onClose={() => setSelectedMedia(null)}
-          onSave={handleSaveMetadata}
-          onDelete={handleDeleteMedia}
-        />
-      )}
+      <Show when={selectedMedia()}>
+        {(media) => (
+          <MediaModal
+            media={media()}
+            onClose={() => setSelectedMedia(null)}
+            onSave={handleSaveMetadata}
+            onDelete={handleDeleteMedia}
+          />
+        )}
+      </Show>
     </div>
   );
 };
