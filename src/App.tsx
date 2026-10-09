@@ -1,5 +1,7 @@
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { listen } from "@tauri-apps/api/event";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
+import AppMenuModal from "@/components/AppMenuModal";
 import Sidebar from "@/components/Sidebar";
 import MediaCard from "@/components/MediaCard";
 import MediaModal from "@/components/MediaModal";
@@ -19,6 +21,7 @@ const App = () => {
   const [isLoading, setIsLoading] = createSignal(false);
   const [isAdding, setIsAdding] = createSignal(false);
   const [loadError, setLoadError] = createSignal<string | null>(null);
+  const [appMenuOpen, setAppMenuOpen] = createSignal(false);
 
   const loadMedia = async () => {
     setIsLoading(true);
@@ -37,6 +40,25 @@ const App = () => {
 
   onMount(() => {
     void loadMedia();
+
+    const openAppMenu = () => setAppMenuOpen(true);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "," && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        openAppMenu();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    let unlisten: (() => void) | undefined;
+    void listen("app-menu", openAppMenu).then((stop) => {
+      unlisten = stop;
+    });
+
+    onCleanup(() => {
+      window.removeEventListener("keydown", handleKeyDown);
+      unlisten?.();
+    });
   });
 
   const filteredMedia = createMemo(() => {
@@ -177,6 +199,9 @@ const App = () => {
           </Show>
         </section>
       </main>
+      <Show when={appMenuOpen()}>
+        <AppMenuModal onClose={() => setAppMenuOpen(false)} />
+      </Show>
       <Show when={selectedMedia()}>
         {(media) => (
           <MediaModal
