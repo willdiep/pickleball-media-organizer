@@ -8,6 +8,7 @@ import MediaModal from "@/components/MediaModal";
 
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { buildGalleryEntries } from "@/lib/gallery";
 import * as mediaApi from "@/lib/media-api";
 
 import type { NormalizedMedia, Tag } from "./types/media";
@@ -16,8 +17,7 @@ const App = () => {
   const [media, setMedia] = createSignal<NormalizedMedia[]>([]);
   const [tags, setTags] = createSignal<Tag[]>([]);
   const [selectedTag, setSelectedTag] = createSignal("all");
-  const [selectedMedia, setSelectedMedia] =
-    createSignal<NormalizedMedia | null>(null);
+  const [openIds, setOpenIds] = createSignal<number[] | null>(null);
   const [isLoading, setIsLoading] = createSignal(false);
   const [isAdding, setIsAdding] = createSignal(false);
   const [loadError, setLoadError] = createSignal<string | null>(null);
@@ -61,13 +61,25 @@ const App = () => {
     });
   });
 
-  const filteredMedia = createMemo(() => {
+  const gallery = createMemo(() => {
     const tag = selectedTag();
-    const items = media();
-    if (tag === "all") return items;
-    return items.filter((item) =>
-      item.tags?.some((itemTag) => itemTag.name === tag)
+    const entries = buildGalleryEntries(media());
+    if (tag === "all") return entries;
+    return entries.filter((entry) =>
+      entry.items.some((item) =>
+        item.tags?.some((itemTag) => itemTag.name === tag)
+      )
     );
+  });
+
+  const openItems = createMemo(() => {
+    const ids = openIds();
+    if (!ids) return [];
+    const byId = new Map(media().map((item) => [item.id, item]));
+    return ids.flatMap((id) => {
+      const item = byId.get(id);
+      return item ? [item] : [];
+    });
   });
 
   const handleAddFolder = async () => {
@@ -104,7 +116,6 @@ const App = () => {
         setMedia((prev) =>
           prev.map((item) => (item.id === mediaId ? latestMedia : item))
         );
-        setSelectedMedia(latestMedia);
       }
       setTags(updatedTags);
     } catch (error) {
@@ -116,19 +127,20 @@ const App = () => {
     const result = await mediaApi.deleteAllMedia();
     setMedia(result.media || []);
     setTags(result.tags || []);
-    setSelectedMedia(null);
+    setOpenIds(null);
     setSelectedTag("all");
   };
 
-  const handleDeleteMedia = async () => {
-    const current = selectedMedia();
-    if (!current) return;
-
+  const handleDeleteMedia = async (mediaId: number) => {
     try {
-      const result = await mediaApi.deleteMedia(current.id);
+      const result = await mediaApi.deleteMedia(mediaId);
       if (result?.media) setMedia(result.media);
       if (result?.tags) setTags(result.tags);
-      setSelectedMedia(null);
+      setOpenIds((ids) => {
+        if (!ids) return null;
+        const next = ids.filter((id) => id !== mediaId);
+        return next.length > 0 ? next : null;
+      });
     } catch (error) {
       console.error("Failed to delete media", error);
       throw error;
@@ -177,7 +189,7 @@ const App = () => {
             }
           >
             <Show
-              when={filteredMedia().length > 0}
+              when={gallery().length > 0}
               fallback={
                 <div class="mt-10 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-white py-10">
                   <div class="text-3xl">🟢</div>
@@ -198,9 +210,16 @@ const App = () => {
               }
             >
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                <For each={filteredMedia()}>
-                  {(item) => (
-                    <MediaCard media={item} onSelect={setSelectedMedia} />
+                <For each={gallery()}>
+                  {(entry) => (
+                    <MediaCard
+                      title={entry.title}
+                      items={entry.items}
+                      grouped={entry.grouped}
+                      onSelect={() =>
+                        setOpenIds(entry.items.map((item) => item.id))
+                      }
+                    />
                   )}
                 </For>
               </div>
@@ -214,15 +233,13 @@ const App = () => {
           onDeleteAll={handleDeleteAllMedia}
         />
       </Show>
-      <Show when={selectedMedia()}>
-        {(media) => (
-          <MediaModal
-            media={media()}
-            onClose={() => setSelectedMedia(null)}
-            onSave={handleSaveMetadata}
-            onDelete={handleDeleteMedia}
-          />
-        )}
+      <Show when={openItems().length > 0}>
+        <MediaModal
+          items={openItems()}
+          onClose={() => setOpenIds(null)}
+          onSave={handleSaveMetadata}
+          onDelete={handleDeleteMedia}
+        />
       </Show>
     </div>
   );

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{Connection, Row, params};
 use serde::Serialize;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -23,6 +23,7 @@ pub struct MediaRecord {
     pub filepath: String,
     pub mediatype: String,
     pub description: Option<String>,
+    pub group_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub tags: Vec<TagRecord>,
@@ -48,11 +49,7 @@ pub fn database_file() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = if cwd.join("src-tauri").is_dir() {
         cwd
-    } else if cwd
-        .file_name()
-        .and_then(|name| name.to_str())
-        == Some("src-tauri")
-    {
+    } else if cwd.file_name().and_then(|name| name.to_str()) == Some("src-tauri") {
         cwd.join("..")
     } else {
         cwd
@@ -87,6 +84,15 @@ fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     if description_exists == 0 {
         conn.execute_batch(include_str!("../migrations/002_description.sql"))?;
+    }
+
+    let group_path_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('Media') WHERE name = 'group_path'",
+        [],
+        |row| row.get(0),
+    )?;
+    if group_path_exists == 0 {
+        conn.execute_batch(include_str!("../migrations/003_group_path.sql"))?;
     }
     Ok(())
 }
@@ -206,18 +212,23 @@ pub fn ingest_directory(conn: &Connection, directory: &Path) -> rusqlite::Result
             continue;
         };
         let filepath = path.to_string_lossy().to_string();
-        let inserted = tx.execute(
-            "INSERT INTO Media (uuid, filename, filepath, mediatype, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))
-             ON CONFLICT(filepath) DO NOTHING",
-            params![Uuid::new_v4().to_string(), filename, filepath, mediatype],
+        let group_path =
+            group_path_for(directory, path).map(|group| group.to_string_lossy().into_owned());
+        tx.execute(
+            "INSERT INTO Media (uuid, filename, filepath, mediatype, group_path, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))
+             ON CONFLICT(filepath) DO UPDATE SET group_path = excluded.group_path",
+            params![
+                Uuid::new_v4().to_string(),
+                filename,
+                filepath,
+                mediatype,
+                group_path
+            ],
         )?;
-        if inserted == 0 {
-            // Existing filepath is left unchanged, matching the previous upsert.
-            imported += 1;
-        } else {
-            imported += 1;
-        }
+        // A conflicting filepath keeps its tags and description. Only group_path
+        // is refreshed so importing the same folder again can attach grouping.
+        imported += 1;
     }
     tx.commit()?;
     Ok((imported, skipped))
@@ -243,7 +254,7 @@ pub fn stored_directories(conn: &Connection) -> rusqlite::Result<Vec<PathBuf>> {
 
 fn load_media(conn: &Connection) -> rusqlite::Result<Vec<MediaRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, uuid, filename, filepath, mediatype, description, created_at, updated_at
+        "SELECT id, uuid, filename, filepath, mediatype, description, created_at, updated_at, group_path
          FROM Media
          ORDER BY
            CASE typeof(created_at)
@@ -261,6 +272,7 @@ fn load_media(conn: &Connection) -> rusqlite::Result<Vec<MediaRecord>> {
             filepath: row.get(3)?,
             mediatype: row.get(4)?,
             description: row.get(5)?,
+            group_path: row.get(8)?,
             created_at: read_timestamp(row, 6)?,
             updated_at: read_timestamp(row, 7)?,
             tags: Vec::new(),
@@ -311,6 +323,23 @@ fn read_timestamp(row: &Row<'_>, index: usize) -> rusqlite::Result<String> {
     }
 }
 
+/// Files directly in the imported root stay ungrouped. Everything under an
+/// immediate child directory shares that directory, including nested files.
+fn group_path_for(root: &Path, file: &Path) -> Option<PathBuf> {
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canonical_file = fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    let relative = canonical_file.strip_prefix(&canonical_root).ok()?;
+    let mut parts = relative.components();
+    let first = parts.next()?;
+    if parts.next().is_none() {
+        return None;
+    }
+    match first {
+        std::path::Component::Normal(_) => Some(canonical_root.join(first)),
+        _ => None,
+    }
+}
+
 fn infer_media_type(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -332,6 +361,8 @@ mod tests {
             .unwrap();
         conn.execute_batch(include_str!("../migrations/002_description.sql"))
             .unwrap();
+        conn.execute_batch(include_str!("../migrations/003_group_path.sql"))
+            .unwrap();
         conn.execute(
             "INSERT INTO Media (uuid, filename, filepath, mediatype, created_at, updated_at, description)
              VALUES ('id-1', 'rally.png', '/tmp/rally.png', 'PHOTO', datetime('now'), datetime('now'), 'note')",
@@ -340,11 +371,8 @@ mod tests {
         .unwrap();
         conn.execute("INSERT INTO Tag (name) VALUES ('rally')", [])
             .unwrap();
-        conn.execute(
-            "INSERT INTO MediaTag (mediaId, tagId) VALUES (1, 1)",
-            [],
-        )
-        .unwrap();
+        conn.execute("INSERT INTO MediaTag (mediaId, tagId) VALUES (1, 1)", [])
+            .unwrap();
 
         let library = delete_all_media(&conn).unwrap();
         assert!(library.media.is_empty());
@@ -362,5 +390,94 @@ mod tests {
         assert_eq!(media_count, 0);
         assert_eq!(tag_count, 0);
         assert_eq!(link_count, 0);
+    }
+
+    #[test]
+    fn ingest_groups_subdirectory_media_and_leaves_root_files_alone() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let root = std::env::temp_dir().join(format!("pickleball-group-{}", Uuid::new_v4()));
+        let cleanup = root.clone();
+        let _guard = scopeguard(&cleanup);
+        fs::create_dir_all(root.join("rally-a").join("nested")).unwrap();
+        fs::create_dir_all(root.join("rally-b")).unwrap();
+        fs::write(root.join("loose.png"), b"png").unwrap();
+        fs::write(root.join("notes.txt"), b"skip").unwrap();
+        let a1 = root.join("rally-a").join("a1.png");
+        fs::write(&a1, b"png").unwrap();
+        fs::write(root.join("rally-a").join("nested").join("a2.png"), b"png").unwrap();
+        fs::write(root.join("rally-b").join("b1.png"), b"png").unwrap();
+
+        conn.execute(
+            "INSERT INTO Media (uuid, filename, filepath, mediatype, description, group_path, created_at, updated_at)
+             VALUES ('keep-a1', 'a1.png', ?1, 'PHOTO', 'keep me', NULL, datetime('now'), datetime('now'))",
+            [a1.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        let (imported, skipped) = ingest_directory(&conn, &root).unwrap();
+        assert_eq!(imported, 4);
+        assert_eq!(skipped, 1);
+
+        let media = load_media(&conn).unwrap();
+        assert_eq!(media.len(), 4);
+        let by_name = |filename: &str| {
+            media
+                .iter()
+                .find(|item| item.filename == filename)
+                .unwrap_or_else(|| panic!("missing {filename}"))
+        };
+
+        let rally_a = fs::canonicalize(root.join("rally-a"))
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let rally_b = fs::canonicalize(root.join("rally-b"))
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        assert_eq!(by_name("loose.png").group_path, None);
+        assert_eq!(
+            by_name("a1.png").group_path.as_deref(),
+            Some(rally_a.as_str())
+        );
+        assert_eq!(by_name("a1.png").description.as_deref(), Some("keep me"));
+        assert_eq!(
+            by_name("a2.png").group_path.as_deref(),
+            Some(rally_a.as_str())
+        );
+        assert_eq!(
+            by_name("b1.png").group_path.as_deref(),
+            Some(rally_b.as_str())
+        );
+        assert!(media.iter().all(|item| item.filename != "notes.txt"));
+
+        let (imported_again, skipped_again) = ingest_directory(&conn, &root).unwrap();
+        assert_eq!(imported_again, 4);
+        assert_eq!(skipped_again, 1);
+        let again = load_media(&conn).unwrap();
+        assert_eq!(again.len(), 4);
+        assert_eq!(
+            again
+                .iter()
+                .find(|item| item.filename == "a1.png")
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("keep me")
+        );
+    }
+
+    fn scopeguard(path: &Path) -> impl Drop {
+        struct Guard(PathBuf);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        Guard(path.to_path_buf())
     }
 }

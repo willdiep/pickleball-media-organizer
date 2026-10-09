@@ -1,8 +1,9 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import VideoJS from "@/components/VideoJS";
+import { folderName } from "@/lib/gallery";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -16,14 +17,14 @@ import type Player from "video.js/dist/types/player";
 import type { NormalizedMedia } from "@/types/media";
 
 interface MediaModalProps {
-  media: NormalizedMedia;
+  items: NormalizedMedia[];
   onClose: () => void;
   onSave: (
     mediaId: number,
     tagList: string[],
     description: string
   ) => Promise<void>;
-  onDelete: () => Promise<void>;
+  onDelete: (mediaId: number) => Promise<void>;
 }
 
 function videoContentType(filename: string): string {
@@ -48,6 +49,15 @@ const videoContainerStyle = {
   "max-width": "min(90vw, calc(90vh * 9 / 16))",
 };
 
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) {
+    return true;
+  }
+  return Boolean(target.closest("video, .video-js"));
+}
+
 const MediaModal = (props: MediaModalProps) => {
   const [tagInput, setTagInput] = createSignal("");
   const [tagList, setTagList] = createSignal<string[]>([]);
@@ -55,23 +65,77 @@ const MediaModal = (props: MediaModalProps) => {
   const [confirmingDelete, setConfirmingDelete] = createSignal(false);
   const [isDeleting, setIsDeleting] = createSignal(false);
   const [deleteError, setDeleteError] = createSignal<string | null>(null);
+  const [index, setIndex] = createSignal(0);
+  let seenIds = "";
 
-  const fileUrl = () =>
-    props.media.fileUrl || convertFileSrc(props.media.filepath);
+  const current = (): NormalizedMedia | undefined =>
+    props.items[index()] ?? props.items[0];
 
-  const mediaFilename = () =>
-    props.media.filename && props.media.filename.length >= 80
-      ? `${props.media.filename.slice(0, 80)}...`
-      : props.media.filename;
+  const fileUrl = () => {
+    const item = current();
+    if (!item) return "";
+    return item.fileUrl || convertFileSrc(item.filepath);
+  };
+
+  const mediaFilename = () => {
+    const filename = current()?.filename ?? "";
+    return filename.length >= 80 ? `${filename.slice(0, 80)}...` : filename;
+  };
+
+  const groupLabel = () => {
+    const path = current()?.groupPath;
+    if (!path) return null;
+    if (!props.items.every((item) => item.groupPath === path)) return null;
+    return folderName(path);
+  };
+
+  const step = (direction: -1 | 1) => {
+    const count = props.items.length;
+    if (count < 2 || confirmingDelete() || isDeleting()) return;
+    setConfirmingDelete(false);
+    setDeleteError(null);
+    setIndex((value) => (value + direction + count) % count);
+  };
 
   createEffect(() => {
-    setTagList(props.media.tags?.map((tag) => tag.name) ?? []);
-    setDescription(props.media.description ?? "");
+    const ids = props.items.map((item) => item.id).join(",");
+    if (ids === seenIds) return;
+    const previous = seenIds.split(",").filter(Boolean);
+    const subset =
+      previous.length > 0 &&
+      props.items.every((item) => previous.includes(String(item.id)));
+    seenIds = ids;
+    if (!subset) {
+      setIndex(0);
+      return;
+    }
+    setIndex((value) => Math.min(value, Math.max(props.items.length - 1, 0)));
   });
+
+  createEffect(
+    on(
+      () => current()?.id,
+      () => {
+        const item = current();
+        if (!item) return;
+        setTagList(item.tags?.map((tag) => tag.name) ?? []);
+        setDescription(item.description ?? "");
+        setTagInput("");
+      }
+    )
+  );
 
   onMount(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || isDeleting()) return;
+      if (isDeleting()) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        if (props.items.length < 2 || confirmingDelete()) return;
+        if (isTypingTarget(event.target)) return;
+        event.preventDefault();
+        step(event.key === "ArrowLeft" ? -1 : 1);
+        return;
+      }
+      if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (confirmingDelete()) {
@@ -89,10 +153,14 @@ const MediaModal = (props: MediaModalProps) => {
   });
 
   const confirmDelete = async () => {
+    const item = current();
+    if (!item) return;
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await props.onDelete();
+      await props.onDelete(item.id);
+      setConfirmingDelete(false);
+      setIsDeleting(false);
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : String(error));
       setIsDeleting(false);
@@ -122,7 +190,9 @@ const MediaModal = (props: MediaModalProps) => {
   };
 
   const saveTags = async () => {
-    await props.onSave(props.media.id, tagList(), description());
+    const item = current();
+    if (!item) return;
+    await props.onSave(item.id, tagList(), description());
     props.onClose();
   };
 
@@ -134,7 +204,7 @@ const MediaModal = (props: MediaModalProps) => {
     sources: [
       {
         src: fileUrl(),
-        type: videoContentType(props.media.filename),
+        type: videoContentType(current()?.filename ?? ""),
       },
     ],
   }));
@@ -149,55 +219,102 @@ const MediaModal = (props: MediaModalProps) => {
   };
 
   return (
-    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4"
+      data-testid="media-modal"
+    >
       <div class="flex max-h-screen w-auto max-w-[90vw] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
-        <header class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+        <header class="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
             <p class="text-xs uppercase tracking-wide text-slate-500">
-              Preview
+              {groupLabel() ?? "Preview"}
             </p>
-            <h2 class="text-lg text-slate-900">{mediaFilename()}</h2>
+            <h2
+              data-testid="media-filename"
+              class="text-lg text-slate-900"
+            >
+              {mediaFilename()}
+            </h2>
           </div>
-          <Button
-            onClick={() => props.onClose()}
-            class="bg-slate-100 px-3 py-2 text-sm text-slate-600 hover:bg-slate-200"
-          >
-            Close
-          </Button>
+          <div class="flex items-center gap-3">
+            <Show when={props.items.length > 1}>
+              <p
+                data-testid="carousel-position"
+                class="text-sm font-semibold tabular-nums text-slate-600"
+              >
+                {index() + 1} / {props.items.length}
+              </p>
+            </Show>
+            <Button
+              onClick={() => props.onClose()}
+              class="bg-slate-100 px-3 py-2 text-sm text-slate-600 hover:bg-slate-200"
+            >
+              Close
+            </Button>
+          </div>
         </header>
         <div class="grid grid-cols-1 items-start gap-4 overflow-auto md:grid-cols-[minmax(0,1fr)_400px]">
-          <div class="flex items-center justify-center rounded-2xl">
-            <div class="flex w-full items-center justify-center">
-              <Show
-                when={props.media.mediatype === "PHOTO"}
-                fallback={
-                  <div
-                    class="cursor-pointer overflow-hidden bg-black shadow-sm"
-                    style={videoContainerStyle}
-                  >
-                    <VideoJS
-                      options={videoJsOptions()}
-                      onReady={handlePlayerReady}
-                      class="h-full w-full"
-                    />
-                  </div>
-                }
+          <div class="relative flex items-center justify-center rounded-2xl">
+            <Show when={props.items.length > 1}>
+              <button
+                type="button"
+                data-testid="carousel-prev"
+                aria-label="Previous"
+                class="absolute left-3 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-2xl leading-none text-slate-800 shadow"
+                onClick={() => step(-1)}
               >
-                <img
-                  src={fileUrl()}
-                  class="h-[80vh] w-full bg-white object-contain shadow-sm"
-                  alt={props.media.filename}
-                />
+                ‹
+              </button>
+            </Show>
+            <div class="flex w-full items-center justify-center">
+              <Show when={current()} keyed>
+                {(item) => (
+                  <Show
+                    when={item.mediatype === "PHOTO"}
+                    fallback={
+                      <div
+                        class="cursor-pointer overflow-hidden bg-black shadow-sm"
+                        style={videoContainerStyle}
+                      >
+                        <VideoJS
+                          options={videoJsOptions()}
+                          onReady={handlePlayerReady}
+                          class="h-full w-full"
+                        />
+                      </div>
+                    }
+                  >
+                    <img
+                      src={item.fileUrl || convertFileSrc(item.filepath)}
+                      class="h-[80vh] w-full bg-white object-contain shadow-sm"
+                      alt={item.filename}
+                    />
+                  </Show>
+                )}
               </Show>
             </div>
+            <Show when={props.items.length > 1}>
+              <button
+                type="button"
+                data-testid="carousel-next"
+                aria-label="Next"
+                class="absolute right-3 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-2xl leading-none text-slate-800 shadow"
+                onClick={() => step(1)}
+              >
+                ›
+              </button>
+            </Show>
           </div>
           <div class="flex h-full flex-col gap-6 rounded-2xl bg-white py-4 pr-4">
             <div class="grid w-full gap-2">
               <p class="text-xs uppercase tracking-wide text-slate-500">
                 Filepath
               </p>
-              <p class="break-all text-sm text-slate-800">
-                {props.media.filepath}
+              <p
+                data-testid="media-filepath"
+                class="break-all text-sm text-slate-800"
+              >
+                {current()?.filepath}
               </p>
             </div>
 

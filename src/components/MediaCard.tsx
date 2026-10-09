@@ -12,32 +12,49 @@ import TagBadge from "@/components/TagBadge";
 import type { NormalizedMedia } from "@/types/media";
 
 interface MediaCardProps {
-  media: NormalizedMedia;
-  onSelect: (media: NormalizedMedia) => void;
+  title: string;
+  items: NormalizedMedia[];
+  grouped: boolean;
+  onSelect: () => void;
 }
 
 function MediaCard(props: MediaCardProps) {
-  const tagNames = () => props.media.tags?.map((tag) => tag.name) ?? [];
+  const preview = () =>
+    props.items.find((item) => item.mediatype === "PHOTO") ?? props.items[0];
+  const tagNames = () => {
+    const names = props.items.flatMap(
+      (item) => item.tags?.map((tag) => tag.name) ?? []
+    );
+    return [...new Set(names)];
+  };
   const description = () => {
-    const text = props.media.description;
+    if (props.grouped && props.items.length > 1) return "";
+    const text = props.items[0]?.description;
     if (!text) return "";
     return text.length >= 100 ? `${text.slice(0, 100)}...` : text;
   };
-  const fileUrl = () =>
-    props.media.fileUrl || convertFileSrc(props.media.filepath);
+  const fileUrl = () => {
+    const item = preview();
+    if (!item) return "";
+    return item.fileUrl || convertFileSrc(item.filepath);
+  };
+  const countLabel = () =>
+    props.items.length === 1 ? "1 item" : `${props.items.length} items`;
 
   return (
     <Card
       class="flex w-full cursor-pointer flex-col transition hover:-translate-y-[1px] hover:border-emerald-200 hover:shadow-md"
-      onClick={() => props.onSelect(props.media)}
+      data-testid="gallery-card"
+      data-grouped={props.grouped ? "true" : "false"}
+      onClick={() => props.onSelect()}
     >
       <div class="relative aspect-video w-full overflow-hidden rounded-t-xl bg-slate-100">
         <Show
-          when={props.media.mediatype === "VIDEO"}
+          when={preview()?.mediatype === "VIDEO"}
           fallback={
             <img
               src={fileUrl()}
-              alt={props.media.filename}
+              alt={preview()?.filename ?? props.title}
               loading="lazy"
               class="absolute inset-0 h-full w-full bg-white object-cover"
             />
@@ -51,11 +68,22 @@ function MediaCard(props: MediaCardProps) {
             class="absolute inset-0 h-full w-full object-cover"
           />
         </Show>
+        <Show when={props.grouped}>
+          <span
+            data-testid="group-count"
+            class="absolute right-2 top-2 rounded-full bg-slate-900/80 px-2 py-1 text-xs font-semibold text-white"
+          >
+            {countLabel()}
+          </span>
+        </Show>
       </div>
       <div class="flex flex-1 flex-col justify-between">
         <CardHeader class="pb-2">
-          <CardTitle class="break-all text-sm font-semibold">
-            {props.media.filename}
+          <CardTitle
+            data-testid="gallery-card-title"
+            class="break-all text-sm font-semibold"
+          >
+            {props.title}
           </CardTitle>
           <Show when={description()}>
             <CardDescription>{description()}</CardDescription>
