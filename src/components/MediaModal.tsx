@@ -52,6 +52,9 @@ const MediaModal = (props: MediaModalProps) => {
   const [tagInput, setTagInput] = createSignal("");
   const [tagList, setTagList] = createSignal<string[]>([]);
   const [description, setDescription] = createSignal("");
+  const [confirmingDelete, setConfirmingDelete] = createSignal(false);
+  const [isDeleting, setIsDeleting] = createSignal(false);
+  const [deleteError, setDeleteError] = createSignal<string | null>(null);
 
   const fileUrl = () =>
     props.media.fileUrl || convertFileSrc(props.media.filepath);
@@ -68,15 +71,33 @@ const MediaModal = (props: MediaModalProps) => {
 
   onMount(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        props.onClose();
+      if (event.key !== "Escape" || isDeleting()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (confirmingDelete()) {
+        setConfirmingDelete(false);
+        setDeleteError(null);
+        return;
       }
+      props.onClose();
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+    window.addEventListener("keydown", handleKeyDown, true);
+    onCleanup(() =>
+      window.removeEventListener("keydown", handleKeyDown, true)
+    );
   });
+
+  const confirmDelete = async () => {
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await props.onDelete();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : String(error));
+      setIsDeleting(false);
+    }
+  };
 
   const addTagFromInput = () => {
     const raw = tagInput().trim().toLowerCase();
@@ -239,7 +260,10 @@ const MediaModal = (props: MediaModalProps) => {
 
             <footer class="mt-auto flex justify-between">
               <div>
-                <Button onClick={() => props.onDelete()} variant="destructive">
+                <Button
+                  onClick={() => setConfirmingDelete(true)}
+                  variant="destructive"
+                >
                   Delete
                 </Button>
               </div>
@@ -262,6 +286,61 @@ const MediaModal = (props: MediaModalProps) => {
           </div>
         </div>
       </div>
+      <Show when={confirmingDelete()}>
+        <div
+          class="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 px-4"
+          onClick={() => {
+            if (!isDeleting()) {
+              setConfirmingDelete(false);
+              setDeleteError(null);
+            }
+          }}
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-media-title"
+            data-testid="delete-media-confirm"
+            class="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p class="text-xs uppercase tracking-wide text-slate-500">
+              Confirm
+            </p>
+            <h2 id="delete-media-title" class="mt-1 text-lg text-slate-900">
+              Delete this media?
+            </h2>
+            <p class="mt-3 text-sm leading-relaxed text-slate-600">
+              Are you sure you wish to delete {mediaFilename()}? This removes
+              it from the library. The file on disk is left in place.
+            </p>
+            <Show when={deleteError()}>
+              <p class="mt-3 text-sm text-red-600">{deleteError()}</p>
+            </Show>
+            <div class="mt-6 flex items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                disabled={isDeleting()}
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  setDeleteError(null);
+                }}
+                class="px-4 py-2 text-sm"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={isDeleting()}
+                onClick={() => void confirmDelete()}
+                class="px-4 py-2 text-sm"
+              >
+                {isDeleting() ? "Deleting..." : "Delete"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 };

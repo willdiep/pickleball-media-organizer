@@ -131,6 +131,7 @@ const App = () => {
       setSelectedMedia(null);
     } catch (error) {
       console.error("Failed to delete media", error);
+      throw error;
     }
   };
 
