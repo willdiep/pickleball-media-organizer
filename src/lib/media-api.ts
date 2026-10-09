@@ -84,6 +84,16 @@ export async function updateDescription(
   return { media: withFileUrl(result.media) };
 }
 
+export async function deleteAllMedia(): Promise<DeleteMediaResponse> {
+  const result = await invoke<{ media: MediaRow[]; tags: Tag[] }>(
+    "delete_all_media"
+  );
+  return {
+    media: result.media.map(withFileUrl),
+    tags: result.tags,
+  };
+}
+
 export async function deleteMedia(mediaId: number): Promise<DeleteMediaResponse> {
   const result = await invoke<{ media: MediaRow[]; tags: Tag[] }>(
     "delete_media",

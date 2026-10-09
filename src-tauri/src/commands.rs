@@ -127,3 +127,8 @@ pub fn update_description(
 pub fn delete_media(db: State<'_, Db>, media_id: i64) -> Result<LibraryPayload, String> {
     with_db(&db, |conn| db::delete_media(conn, media_id))
 }
+
+#[tauri::command]
+pub fn delete_all_media(db: State<'_, Db>) -> Result<LibraryPayload, String> {
+    with_db(&db, db::delete_all_media)
+}

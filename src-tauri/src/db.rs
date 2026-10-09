@@ -172,6 +172,15 @@ pub fn delete_media(conn: &Connection, media_id: i64) -> rusqlite::Result<Librar
     list_library(conn)
 }
 
+pub fn delete_all_media(conn: &Connection) -> rusqlite::Result<LibraryPayload> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM MediaTag", [])?;
+    tx.execute("DELETE FROM Media", [])?;
+    tx.execute("DELETE FROM Tag", [])?;
+    tx.commit()?;
+    list_library(conn)
+}
+
 pub fn ingest_directory(conn: &Connection, directory: &Path) -> rusqlite::Result<(i64, i64)> {
     if !directory.is_dir() {
         return Err(rusqlite::Error::InvalidParameterName(format!(
@@ -308,5 +317,50 @@ fn infer_media_type(path: &Path) -> Option<&'static str> {
         "mp4" | "mov" | "m4v" | "webm" | "avi" => Some("VIDEO"),
         "jpg" | "jpeg" | "png" | "gif" | "webp" => Some("PHOTO"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_all_media_removes_media_links_and_tags() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.execute_batch(include_str!("../migrations/001_init.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("../migrations/002_description.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO Media (uuid, filename, filepath, mediatype, created_at, updated_at, description)
+             VALUES ('id-1', 'rally.png', '/tmp/rally.png', 'PHOTO', datetime('now'), datetime('now'), 'note')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO Tag (name) VALUES ('rally')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO MediaTag (mediaId, tagId) VALUES (1, 1)",
+            [],
+        )
+        .unwrap();
+
+        let library = delete_all_media(&conn).unwrap();
+        assert!(library.media.is_empty());
+        assert!(library.tags.is_empty());
+
+        let media_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM Media", [], |row| row.get(0))
+            .unwrap();
+        let tag_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM Tag", [], |row| row.get(0))
+            .unwrap();
+        let link_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM MediaTag", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(media_count, 0);
+        assert_eq!(tag_count, 0);
+        assert_eq!(link_count, 0);
     }
 }

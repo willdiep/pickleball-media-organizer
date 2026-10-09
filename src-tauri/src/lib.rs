@@ -55,6 +55,7 @@ pub fn run() {
             commands::update_tags,
             commands::update_description,
             commands::delete_media,
+            commands::delete_all_media,
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

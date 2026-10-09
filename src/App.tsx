@@ -112,6 +112,14 @@ const App = () => {
     }
   };
 
+  const handleDeleteAllMedia = async () => {
+    const result = await mediaApi.deleteAllMedia();
+    setMedia(result.media || []);
+    setTags(result.tags || []);
+    setSelectedMedia(null);
+    setSelectedTag("all");
+  };
+
   const handleDeleteMedia = async () => {
     const current = selectedMedia();
     if (!current) return;
@@ -200,7 +208,10 @@ const App = () => {
         </section>
       </main>
       <Show when={appMenuOpen()}>
-        <AppMenuModal onClose={() => setAppMenuOpen(false)} />
+        <AppMenuModal
+          onClose={() => setAppMenuOpen(false)}
+          onDeleteAll={handleDeleteAllMedia}
+        />
       </Show>
       <Show when={selectedMedia()}>
         {(media) => (
