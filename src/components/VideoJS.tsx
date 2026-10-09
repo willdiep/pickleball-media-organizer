@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { useEffect, useRef } from "react";
 import videojs from "video.js";
 import type Player from "video.js/dist/types/player";
 import "video.js/dist/video-js.css";
@@ -19,70 +19,58 @@ interface VideoJSOptions {
 interface VideoJSProps {
   options: VideoJSOptions;
   onReady?: (player: Player) => void;
-  class?: string;
+  className?: string;
 }
 
 type PlayerWithHotkeys = Player & {
   hotkeys?: (options?: { seekStep?: number }) => void;
 };
 
-export const VideoJS = (props: VideoJSProps) => {
-  let mountPoint: HTMLDivElement | undefined;
-  const [player, setPlayer] = createSignal<Player>();
+export const VideoJS = ({ options, onReady, className }: VideoJSProps) => {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<Player | null>(null);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
-  onMount(() => {
+  useEffect(() => {
+    const mountPoint = mountRef.current;
     if (!mountPoint) return;
 
     const videoElement = document.createElement("video-js");
     videoElement.classList.add("video-js", "vjs-big-play-centered");
     videoElement.style.width = "100%";
     videoElement.style.height = "100%";
-    props.class
-      ?.split(" ")
-      .filter(Boolean)
-      .forEach((cls) => videoElement.classList.add(cls));
     mountPoint.appendChild(videoElement);
 
-    const instance = videojs(videoElement, props.options, () => {
+    const instance = videojs(videoElement, options, () => {
       const withHotkeys = instance as PlayerWithHotkeys;
       if (typeof withHotkeys.hotkeys === "function") {
         withHotkeys.hotkeys({ seekStep: 0.1 });
       }
-      props.onReady?.(instance);
+      onReadyRef.current?.(instance);
     });
-    setPlayer(instance);
-  });
+    playerRef.current = instance;
 
-  createEffect(() => {
-    const instance = player();
-    const options = props.options;
-    const className = props.class;
-    if (!instance) return;
+    return () => {
+      if (!instance.isDisposed()) {
+        instance.dispose();
+      }
+      playerRef.current = null;
+    };
+    // The player is created once; later source changes go through the effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    if (className && instance.el()) {
-      className
-        .split(" ")
-        .filter(Boolean)
-        .forEach((cls) => instance.el()?.classList.add(cls));
-    }
+  useEffect(() => {
+    const instance = playerRef.current;
+    if (!instance || instance.isDisposed()) return;
     instance.autoplay(options.autoplay ?? false);
     instance.src(options.sources ?? []);
-  });
-
-  onCleanup(() => {
-    const instance = player();
-    if (instance && !instance.isDisposed()) {
-      instance.dispose();
-    }
-  });
+  }, [options]);
 
   return (
-    <div
-      data-vjs-player
-      class={props.class}
-      style={{ width: "100%", height: "100%" }}
-    >
-      <div ref={mountPoint} class="h-full w-full" />
+    <div data-vjs-player className={className} style={{ width: "100%", height: "100%" }}>
+      <div ref={mountRef} className="h-full w-full" />
     </div>
   );
 };

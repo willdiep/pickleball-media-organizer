@@ -1,44 +1,46 @@
 import { listen } from "@tauri-apps/api/event";
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { FolderPlus, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import AppMenuModal from "@/components/AppMenuModal";
-import Sidebar from "@/components/Sidebar";
 import MediaCard from "@/components/MediaCard";
 import MediaModal from "@/components/MediaModal";
-
+import Sidebar from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { buildGalleryEntries } from "@/lib/gallery";
 import * as mediaApi from "@/lib/media-api";
 
 import type { NormalizedMedia, Tag } from "./types/media";
 
 const App = () => {
-  const [media, setMedia] = createSignal<NormalizedMedia[]>([]);
-  const [tags, setTags] = createSignal<Tag[]>([]);
-  const [selectedTag, setSelectedTag] = createSignal("all");
-  const [openIds, setOpenIds] = createSignal<number[] | null>(null);
-  const [isLoading, setIsLoading] = createSignal(false);
-  const [isAdding, setIsAdding] = createSignal(false);
-  const [loadError, setLoadError] = createSignal<string | null>(null);
-  const [appMenuOpen, setAppMenuOpen] = createSignal(false);
+  const [media, setMedia] = useState<NormalizedMedia[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [selectedTag, setSelectedTag] = useState("all");
+  const [openIds, setOpenIds] = useState<number[] | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isAdding, setIsAdding] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [appMenuOpen, setAppMenuOpen] = useState(false);
 
-  const loadMedia = async () => {
-    setIsLoading(true);
-    setLoadError(null);
-    try {
-      const result = await mediaApi.listMedia();
-      setMedia(result.media || []);
-      setTags(result.tags || []);
-    } catch (error) {
-      console.error("Failed to load media", error);
-      setLoadError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  useEffect(() => {
+    let active = true;
+    const loadMedia = async () => {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const result = await mediaApi.listMedia();
+        if (!active) return;
+        setMedia(result.media || []);
+        setTags(result.tags || []);
+      } catch (error) {
+        console.error("Failed to load media", error);
+        if (!active) return;
+        setLoadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
 
-  onMount(() => {
     void loadMedia();
 
     const openAppMenu = () => setAppMenuOpen(true);
@@ -55,32 +57,43 @@ const App = () => {
       unlisten = stop;
     });
 
-    onCleanup(() => {
+    return () => {
+      active = false;
       window.removeEventListener("keydown", handleKeyDown);
       unlisten?.();
-    });
-  });
+    };
+  }, []);
 
-  const gallery = createMemo(() => {
-    const tag = selectedTag();
-    const entries = buildGalleryEntries(media());
-    if (tag === "all") return entries;
+  const gallery = useMemo(() => {
+    const entries = buildGalleryEntries(media);
+    if (selectedTag === "all") return entries;
     return entries.filter((entry) =>
       entry.items.some((item) =>
-        item.tags?.some((itemTag) => itemTag.name === tag)
+        item.tags?.some((itemTag) => itemTag.name === selectedTag)
       )
     );
-  });
+  }, [media, selectedTag]);
 
-  const openItems = createMemo(() => {
-    const ids = openIds();
-    if (!ids) return [];
-    const byId = new Map(media().map((item) => [item.id, item]));
-    return ids.flatMap((id) => {
+  const openItems = useMemo(() => {
+    if (!openIds) return [];
+    const byId = new Map(media.map((item) => [item.id, item]));
+    return openIds.flatMap((id) => {
       const item = byId.get(id);
       return item ? [item] : [];
     });
-  });
+  }, [media, openIds]);
+
+  const visibleCount = gallery.reduce((sum, entry) => sum + entry.items.length, 0);
+
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of media) {
+      for (const tag of item.tags ?? []) {
+        counts.set(tag.name, (counts.get(tag.name) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [media]);
 
   const handleAddFolder = async () => {
     setIsAdding(true);
@@ -88,7 +101,7 @@ const App = () => {
       const result = await mediaApi.addFolder();
       if (result.media) {
         setMedia(result.media);
-        setTags(result.tags || tags());
+        setTags(result.tags || tags);
       }
     } catch (error) {
       console.error("Failed to add folder", error);
@@ -110,7 +123,7 @@ const App = () => {
       );
 
       const latestMedia = descriptionResult?.media || tagResult?.media;
-      const updatedTags = tagResult?.tags || tags();
+      const updatedTags = tagResult?.tags || tags;
 
       if (latestMedia) {
         setMedia((prev) =>
@@ -148,99 +161,90 @@ const App = () => {
   };
 
   return (
-    <div class="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
+    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <Sidebar
-        tags={tags()}
-        selectedTag={selectedTag()}
+        tags={tags}
+        selectedTag={selectedTag}
+        totalCount={media.length}
+        tagCounts={tagCounts}
         onSelectTag={setSelectedTag}
       />
-      <main class="flex flex-1 flex-col">
-        <header class="flex items-center justify-between border-b border-slate-200 bg-white/70 px-6 py-4 backdrop-blur">
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center justify-between gap-4 px-8 py-5">
           <div>
-            <h2 class="text-xl uppercase tracking-wide text-slate-500">
-              Gallery
-            </h2>
-            <Show when={loadError()}>
-              <p class="mt-1 text-xs text-red-600">{loadError()}</p>
-            </Show>
+            <p className="text-sm text-muted-foreground">Highlights</p>
+            <h1 className="text-2xl font-semibold tracking-tight">Library</h1>
+            {loadError ? (
+              <p className="mt-1 text-sm text-destructive">{loadError}</p>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {isLoading
+                  ? "Loading the court…"
+                  : `${visibleCount} ${visibleCount === 1 ? "file" : "files"}`}
+              </p>
+            )}
           </div>
-          <Button
-            onClick={handleAddFolder}
-            disabled={isAdding()}
-            class="bg-emerald-600 hover:bg-emerald-700"
-          >
-            <Show
-              when={isAdding()}
-              fallback="Add Folder"
-            >
-              <span class="flex gap-2">
-                <Spinner /> Loading
-              </span>
-            </Show>
+          <Button onClick={() => void handleAddFolder()} disabled={isAdding}>
+            {isAdding ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <FolderPlus />
+            )}
+            {isAdding ? "Importing" : "Add folder"}
           </Button>
         </header>
-        <section class="scrollbar-light flex-1 overflow-auto px-6 py-4">
-          <Show
-            when={!isLoading()}
-            fallback={
-              <div class="mt-10 text-center text-slate-500">
-                Loading media...
-              </div>
-            }
-          >
-            <Show
-              when={gallery().length > 0}
-              fallback={
-                <div class="mt-10 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-white py-10">
-                  <div class="text-3xl">🟢</div>
-                  <p class="text-sm font-semibold text-slate-700">
-                    No media found
-                  </p>
-                  <p class="text-sm text-slate-500">
-                    Import a folder to start organizing your pickleball
-                    highlights.
-                  </p>
-                  <button
-                    onClick={handleAddFolder}
-                    class="mt-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
-                  >
-                    Add Folder
-                  </button>
-                </div>
-              }
-            >
-              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                <For each={gallery()}>
-                  {(entry) => (
-                    <MediaCard
-                      title={entry.title}
-                      items={entry.items}
-                      grouped={entry.grouped}
-                      onSelect={() =>
-                        setOpenIds(entry.items.map((item) => item.id))
-                      }
-                    />
-                  )}
-                </For>
-              </div>
-            </Show>
-          </Show>
+        <section className="scrollbar-light flex-1 overflow-auto px-8 pb-8">
+          {isLoading ? (
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Loading media
+            </div>
+          ) : gallery.length === 0 ? (
+            <div className="mx-auto mt-16 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-border bg-card px-8 py-12 text-center shadow-sm">
+              <span className="grid h-14 w-14 place-items-center rounded-full bg-ball">
+                <span className="h-4 w-4 rounded-full bg-court" />
+              </span>
+              <h2 className="mt-5 text-lg font-semibold">No highlights yet</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Add a folder of photos and videos. Subfolders become their own
+                carousel, and files in the root stay as single clips.
+              </p>
+              <Button className="mt-6" onClick={() => void handleAddFolder()}>
+                <FolderPlus />
+                Add folder
+              </Button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {gallery.map((entry) => (
+                <MediaCard
+                  key={entry.key}
+                  title={entry.title}
+                  items={entry.items}
+                  grouped={entry.grouped}
+                  onSelect={() =>
+                    setOpenIds(entry.items.map((item) => item.id))
+                  }
+                />
+              ))}
+            </div>
+          )}
         </section>
       </main>
-      <Show when={appMenuOpen()}>
+      {appMenuOpen ? (
         <AppMenuModal
           onClose={() => setAppMenuOpen(false)}
           onDeleteAll={handleDeleteAllMedia}
         />
-      </Show>
-      <Show when={openItems().length > 0}>
+      ) : null}
+      {openItems.length > 0 ? (
         <MediaModal
-          items={openItems()}
+          items={openItems}
           onClose={() => setOpenIds(null)}
           onSave={handleSaveMetadata}
           onDelete={handleDeleteMedia}
         />
-      </Show>
+      ) : null}
     </div>
   );
 };

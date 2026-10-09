@@ -1,14 +1,8 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { For, Show } from "solid-js";
+import { Film, Images } from "lucide-react";
 
-import {
-  Card,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import TagBadge from "@/components/TagBadge";
+import { Card, CardDescription, CardTitle } from "@/components/ui/card";
 import type { NormalizedMedia } from "@/types/media";
 
 interface MediaCardProps {
@@ -18,91 +12,81 @@ interface MediaCardProps {
   onSelect: () => void;
 }
 
-function MediaCard(props: MediaCardProps) {
-  const preview = () =>
-    props.items.find((item) => item.mediatype === "PHOTO") ?? props.items[0];
-  const tagNames = () => {
-    const names = props.items.flatMap(
-      (item) => item.tags?.map((tag) => tag.name) ?? []
-    );
-    return [...new Set(names)];
-  };
-  const description = () => {
-    if (props.grouped && props.items.length > 1) return "";
-    const text = props.items[0]?.description;
-    if (!text) return "";
-    return text.length >= 100 ? `${text.slice(0, 100)}...` : text;
-  };
-  const fileUrl = () => {
-    const item = preview();
-    if (!item) return "";
-    return item.fileUrl || convertFileSrc(item.filepath);
-  };
-  const countLabel = () =>
-    props.items.length === 1 ? "1 item" : `${props.items.length} items`;
+function MediaCard({ title, items, grouped, onSelect }: MediaCardProps) {
+  const preview = items.find((item) => item.mediatype === "PHOTO") ?? items[0];
+  const tagNames = [
+    ...new Set(items.flatMap((item) => item.tags?.map((tag) => tag.name) ?? [])),
+  ];
+  const rawDescription =
+    grouped && items.length > 1 ? "" : (items[0]?.description ?? "");
+  const description =
+    rawDescription.length >= 100
+      ? `${rawDescription.slice(0, 100)}...`
+      : rawDescription;
+  const fileUrl = preview
+    ? preview.fileUrl || convertFileSrc(preview.filepath)
+    : "";
+  const countLabel = items.length === 1 ? "1 item" : `${items.length} items`;
 
   return (
     <Card
-      class="flex w-full cursor-pointer flex-col transition hover:-translate-y-[1px] hover:border-emerald-200 hover:shadow-md"
+      className="group flex w-full cursor-pointer flex-col overflow-hidden border-border/80 bg-card shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:ring-2 hover:ring-ball/70"
       data-testid="gallery-card"
-      data-grouped={props.grouped ? "true" : "false"}
-      onClick={() => props.onSelect()}
+      data-grouped={grouped ? "true" : "false"}
+      onClick={onSelect}
     >
-      <div class="relative aspect-video w-full overflow-hidden rounded-t-xl bg-slate-100">
-        <Show
-          when={preview()?.mediatype === "VIDEO"}
-          fallback={
-            <img
-              src={fileUrl()}
-              alt={preview()?.filename ?? props.title}
-              loading="lazy"
-              class="absolute inset-0 h-full w-full bg-white object-cover"
-            />
-          }
-        >
+      <div className="relative aspect-[4/3] w-full overflow-hidden bg-court/10">
+        {preview?.mediatype === "VIDEO" ? (
           <video
-            src={fileUrl()}
+            src={fileUrl}
             muted
-            playsinline
+            playsInline
             preload="metadata"
-            class="absolute inset-0 h-full w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover"
           />
-        </Show>
-        <Show when={props.grouped}>
+        ) : (
+          <img
+            src={fileUrl}
+            alt={preview?.filename ?? title}
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+          />
+        )}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-court/50 to-transparent" />
+        {grouped ? (
           <span
             data-testid="group-count"
-            class="absolute right-2 top-2 rounded-full bg-slate-900/80 px-2 py-1 text-xs font-semibold text-white"
+            className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-ball px-2.5 py-1 text-xs font-semibold text-ball-foreground shadow-sm"
           >
-            {countLabel()}
+            <Images className="h-3.5 w-3.5" />
+            {countLabel}
           </span>
-        </Show>
+        ) : preview?.mediatype === "VIDEO" ? (
+          <span className="absolute right-3 top-3 inline-flex items-center gap-1 rounded-full bg-court/80 px-2.5 py-1 text-xs font-medium text-court-foreground">
+            <Film className="h-3.5 w-3.5" />
+            Video
+          </span>
+        ) : null}
       </div>
-      <div class="flex flex-1 flex-col justify-between">
-        <CardHeader class="pb-2">
+      <div className="flex flex-1 flex-col gap-3 p-4">
+        <div className="space-y-1">
           <CardTitle
             data-testid="gallery-card-title"
-            class="break-all text-sm font-semibold"
+            className="break-all text-base font-semibold leading-snug"
           >
-            {props.title}
+            {title}
           </CardTitle>
-          <Show when={description()}>
-            <CardDescription>{description()}</CardDescription>
-          </Show>
-        </CardHeader>
-        <CardFooter class="flex flex-wrap gap-2">
-          <Show
-            when={tagNames().length > 0}
-            fallback={
-              <span class="text-[11px] uppercase tracking-wide text-slate-400">
-                No tags
-              </span>
-            }
-          >
-            <For each={tagNames()}>
-              {(name) => <TagBadge name={name} />}
-            </For>
-          </Show>
-        </CardFooter>
+          {description ? (
+            <CardDescription className="line-clamp-2">{description}</CardDescription>
+          ) : null}
+        </div>
+        <div className="mt-auto flex flex-wrap gap-1.5">
+          {tagNames.length > 0 ? (
+            tagNames.map((name) => <TagBadge key={name} name={name} />)
+          ) : (
+            <span className="text-xs text-muted-foreground">No tags</span>
+          )}
+        </div>
       </div>
     </Card>
   );

@@ -1,59 +1,86 @@
-import { For, Show } from "solid-js";
+import { Images, Library } from "lucide-react";
 
+import { cn } from "@/lib/utils";
 import type { Tag } from "@/types/media";
 
 interface SidebarProps {
   tags: Tag[];
   selectedTag: string;
+  totalCount: number;
+  tagCounts: Map<string, number>;
   onSelectTag: (tag: string) => void;
 }
 
-const Sidebar = (props: SidebarProps) => (
-  <aside class="flex h-full w-64 flex-col border-r border-slate-200 bg-white/60 p-4 backdrop-blur">
-    <div class="mb-6 flex items-center justify-between">
+const Sidebar = ({
+  tags,
+  selectedTag,
+  totalCount,
+  tagCounts,
+  onSelectTag,
+}: SidebarProps) => (
+  <aside className="flex h-full w-64 shrink-0 flex-col bg-court text-court-foreground">
+    <div className="flex items-center gap-3 px-5 pb-2 pt-6">
+      <span className="grid h-10 w-10 place-items-center rounded-full bg-ball shadow-sm">
+        <span className="h-3 w-3 rounded-full bg-court" />
+      </span>
       <div>
-        <p class="text-xs uppercase tracking-wide text-slate-500">Library</p>
+        <p className="text-sm font-semibold leading-none">Pickleball</p>
+        <p className="mt-1 text-xs text-ball">Media library</p>
       </div>
     </div>
-    <div class="space-y-4">
+
+    <nav className="mt-6 flex-1 space-y-6 overflow-auto px-3 pb-6">
       <div>
-        <p class="text-[11px] uppercase tracking-wide text-slate-500">Views</p>
+        <p className="px-3 text-xs font-medium text-court-foreground/50">Browse</p>
         <button
-          onClick={() => props.onSelectTag("all")}
-          class={`mt-2 flex w-full items-center justify-between rounded-md px-3 py-2 text-sm font-semibold ${
-            props.selectedTag === "all"
-              ? "bg-emerald-500 text-white shadow-sm"
-              : "text-slate-700 hover:bg-slate-100"
-          }`}
+          type="button"
+          onClick={() => onSelectTag("all")}
+          className={cn(
+            "mt-2 flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition",
+            selectedTag === "all"
+              ? "bg-ball text-ball-foreground"
+              : "text-court-foreground/80 hover:bg-white/10"
+          )}
         >
-          <span>All Media</span>
+          <span className="flex items-center gap-2">
+            <Library className="h-4 w-4" />
+            All media
+          </span>
+          <span className="text-xs tabular-nums opacity-70">{totalCount}</span>
         </button>
       </div>
+
       <div>
-        <p class="text-[11px] uppercase tracking-wide text-slate-500">
-          Categories
-        </p>
-        <div class="mt-2 space-y-2">
-          <Show when={props.tags.length === 0}>
-            <p class="text-xs text-slate-400">No tags yet.</p>
-          </Show>
-          <For each={props.tags}>
-            {(tag) => (
+        <p className="px-3 text-xs font-medium text-court-foreground/50">Tags</p>
+        <div className="mt-2 space-y-1">
+          {tags.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-court-foreground/45">No tags yet</p>
+          ) : (
+            tags.map((tag) => (
               <button
-                onClick={() => props.onSelectTag(tag.name)}
-                class={`flex w-full items-center justify-between rounded-md px-3 py-2 text-sm font-semibold ${
-                  props.selectedTag === tag.name
-                    ? "bg-emerald-500 text-white shadow-sm"
-                    : "text-slate-700 hover:bg-slate-100"
-                }`}
+                key={tag.id}
+                type="button"
+                onClick={() => onSelectTag(tag.name)}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm font-medium capitalize transition",
+                  selectedTag === tag.name
+                    ? "bg-ball text-ball-foreground"
+                    : "text-court-foreground/80 hover:bg-white/10"
+                )}
               >
-                <span class="capitalize">{tag.name}</span>
+                <span className="flex items-center gap-2">
+                  <Images className="h-4 w-4" />
+                  {tag.name}
+                </span>
+                <span className="text-xs tabular-nums opacity-70">
+                  {tagCounts.get(tag.name) ?? 0}
+                </span>
               </button>
-            )}
-          </For>
+            ))
+          )}
         </div>
       </div>
-    </div>
+    </nav>
   </aside>
 );
 
