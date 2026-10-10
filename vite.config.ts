@@ -9,8 +9,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  clearScreen: false,
+  envPrefix: ["VITE_", "TAURI_"],
   server: {
     port: 5173,
+    strictPort: true,
   },
   build: {
     outDir: "dist",

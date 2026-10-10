@@ -4,12 +4,23 @@ module.exports = {
     content: ["./index.html", "./src/**/*.{js,jsx,ts,tsx}"],
   theme: {
   	extend: {
+  		fontFamily: {
+  			sans: ['Outfit', 'Segoe UI', 'system-ui', 'sans-serif']
+  		},
   		borderRadius: {
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
   			sm: 'calc(var(--radius) - 4px)'
   		},
   		colors: {
+  			court: {
+  				DEFAULT: 'hsl(var(--court))',
+  				foreground: 'hsl(var(--court-foreground))'
+  			},
+  			ball: {
+  				DEFAULT: 'hsl(var(--ball))',
+  				foreground: 'hsl(var(--ball-foreground))'
+  			},
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
   			card: {

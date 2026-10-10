@@ -1,11 +1,14 @@
+import { listen } from "@tauri-apps/api/event";
+import { FolderPlus, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import Sidebar from "@/components/Sidebar";
+import AppMenuModal from "@/components/AppMenuModal";
 import MediaCard from "@/components/MediaCard";
 import MediaModal from "@/components/MediaModal";
-
+import Sidebar from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
+import { buildGalleryEntries } from "@/lib/gallery";
+import * as mediaApi from "@/lib/media-api";
 
 import type { NormalizedMedia, Tag } from "./types/media";
 
@@ -13,53 +16,89 @@ const App = () => {
   const [media, setMedia] = useState<NormalizedMedia[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTag, setSelectedTag] = useState("all");
-  const [selectedMedia, setSelectedMedia] = useState<NormalizedMedia | null>(
-    null
-  );
+  const [openIds, setOpenIds] = useState<number[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
-  const hasBridge = Boolean(window?.electronApi);
-
-  const loadMedia = async () => {
-    setIsLoading(true);
-    try {
-      if (!window.electronApi?.listMedia) {
-        console.warn(
-          "Electron bridge not available. Are you running in Electron?"
-        );
-        return;
-      }
-      const result = await window.electronApi.listMedia();
-      setMedia(result.media || []);
-      setTags(result.tags || []);
-    } catch (error) {
-      console.error("Failed to load media", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [appMenuOpen, setAppMenuOpen] = useState(false);
 
   useEffect(() => {
-    loadMedia();
+    let active = true;
+    const loadMedia = async () => {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const result = await mediaApi.listMedia();
+        if (!active) return;
+        setMedia(result.media || []);
+        setTags(result.tags || []);
+      } catch (error) {
+        console.error("Failed to load media", error);
+        if (!active) return;
+        setLoadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+
+    void loadMedia();
+
+    const openAppMenu = () => setAppMenuOpen(true);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "," && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        openAppMenu();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    let unlisten: (() => void) | undefined;
+    void listen("app-menu", openAppMenu).then((stop) => {
+      unlisten = stop;
+    });
+
+    return () => {
+      active = false;
+      window.removeEventListener("keydown", handleKeyDown);
+      unlisten?.();
+    };
   }, []);
 
-  const filteredMedia = useMemo(() => {
-    if (selectedTag === "all") return media;
-    return media.filter((item) =>
-      item.tags?.some((tag) => tag.name === selectedTag)
+  const gallery = useMemo(() => {
+    const entries = buildGalleryEntries(media);
+    if (selectedTag === "all") return entries;
+    return entries.filter((entry) =>
+      entry.items.some((item) =>
+        item.tags?.some((itemTag) => itemTag.name === selectedTag)
+      )
     );
   }, [media, selectedTag]);
+
+  const openItems = useMemo(() => {
+    if (!openIds) return [];
+    const byId = new Map(media.map((item) => [item.id, item]));
+    return openIds.flatMap((id) => {
+      const item = byId.get(id);
+      return item ? [item] : [];
+    });
+  }, [media, openIds]);
+
+  const visibleCount = gallery.reduce((sum, entry) => sum + entry.items.length, 0);
+
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of media) {
+      for (const tag of item.tags ?? []) {
+        counts.set(tag.name, (counts.get(tag.name) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [media]);
 
   const handleAddFolder = async () => {
     setIsAdding(true);
     try {
-      if (!window.electronApi?.addFolder) {
-        console.error(
-          "Electron bridge not available. Run the app via Electron to add folders."
-        );
-        return;
-      }
-      const result = await window.electronApi.addFolder();
+      const result = await mediaApi.addFolder();
       if (result.media) {
         setMedia(result.media);
         setTags(result.tags || tags);
@@ -76,31 +115,20 @@ const App = () => {
     tagList: string[],
     description: string
   ) => {
-    const canUpdateTags = typeof window.electronApi?.updateTags === "function";
-    const canUpdateDescription =
-      typeof window.electronApi?.updateDescription === "function";
-
-    if (!canUpdateTags && !canUpdateDescription) {
-      console.error("Electron bridge not available. Cannot save changes.");
-      return;
-    }
-
     try {
-      const tagResult = canUpdateTags
-        ? await window.electronApi!.updateTags(mediaId, tagList)
-        : null;
-      const descriptionResult = canUpdateDescription
-        ? await window.electronApi!.updateDescription(mediaId, description)
-        : null;
+      const tagResult = await mediaApi.updateTags(mediaId, tagList);
+      const descriptionResult = await mediaApi.updateDescription(
+        mediaId,
+        description
+      );
 
       const latestMedia = descriptionResult?.media || tagResult?.media;
       const updatedTags = tagResult?.tags || tags;
 
       if (latestMedia) {
         setMedia((prev) =>
-          prev.map((m) => (m.id === mediaId ? latestMedia : m))
+          prev.map((item) => (item.id === mediaId ? latestMedia : item))
         );
-        setSelectedMedia(latestMedia);
       }
       setTags(updatedTags);
     } catch (error) {
@@ -108,100 +136,115 @@ const App = () => {
     }
   };
 
-  const handleDeleteMedia = async () => {
-    if (!selectedMedia) return;
-    if (typeof window.electronApi?.deleteMedia !== "function") {
-      console.error("Electron bridge not available. Cannot delete media.");
-      return;
-    }
+  const handleDeleteAllMedia = async () => {
+    const result = await mediaApi.deleteAllMedia();
+    setMedia(result.media || []);
+    setTags(result.tags || []);
+    setOpenIds(null);
+    setSelectedTag("all");
+  };
 
+  const handleDeleteMedia = async (mediaId: number) => {
     try {
-      const result = await window.electronApi.deleteMedia(selectedMedia.id);
+      const result = await mediaApi.deleteMedia(mediaId);
       if (result?.media) setMedia(result.media);
       if (result?.tags) setTags(result.tags);
-      setSelectedMedia(null);
+      setOpenIds((ids) => {
+        if (!ids) return null;
+        const next = ids.filter((id) => id !== mediaId);
+        return next.length > 0 ? next : null;
+      });
     } catch (error) {
       console.error("Failed to delete media", error);
+      throw error;
     }
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-50 text-slate-900">
+    <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <Sidebar
         tags={tags}
         selectedTag={selectedTag}
+        totalCount={media.length}
+        tagCounts={tagCounts}
         onSelectTag={setSelectedTag}
       />
-      <main className="flex flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white/70 px-6 py-4 backdrop-blur">
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center justify-between gap-4 px-8 py-5">
           <div>
-            <h2 className="text-xl uppercase tracking-wide text-slate-500">
-              Gallery
-            </h2>
-            {!hasBridge && (
-              <p className="mt-1 text-xs text-amber-600">
-                Electron bridge not detected. Start the app via Electron to use
-                native dialogs.
+            <p className="text-sm text-muted-foreground">Highlights</p>
+            <h1 className="text-2xl font-semibold tracking-tight">Library</h1>
+            {loadError ? (
+              <p className="mt-1 text-sm text-destructive">{loadError}</p>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {isLoading
+                  ? "Loading the court…"
+                  : `${visibleCount} ${visibleCount === 1 ? "file" : "files"}`}
               </p>
             )}
           </div>
-          <Button
-            onClick={handleAddFolder}
-            disabled={isAdding}
-            // className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-60"
-            className="bg-emerald-600 hover:bg-emerald-700"
-          >
+          <Button onClick={() => void handleAddFolder()} disabled={isAdding}>
             {isAdding ? (
-              <span className="flex gap-2">
-                <Spinner /> Loading
-              </span>
+              <Loader2 className="animate-spin" />
             ) : (
-              "Add Folder"
+              <FolderPlus />
             )}
+            {isAdding ? "Importing" : "Add folder"}
           </Button>
         </header>
-        <section className="flex-1 overflow-auto px-6 py-4 scrollbar-light">
+        <section className="scrollbar-light flex-1 overflow-auto px-8 pb-8">
           {isLoading ? (
-            <div className="mt-10 text-center text-slate-500">
-              Loading media...
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Loading media
             </div>
-          ) : filteredMedia.length === 0 ? (
-            <div className="mt-10 flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-white py-10">
-              <div className="text-3xl">🟢</div>
-              <p className="text-sm font-semibold text-slate-700">
-                No media found
+          ) : gallery.length === 0 ? (
+            <div className="mx-auto mt-16 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-border bg-card px-8 py-12 text-center shadow-sm">
+              <span className="grid h-14 w-14 place-items-center rounded-full bg-ball">
+                <span className="h-4 w-4 rounded-full bg-court" />
+              </span>
+              <h2 className="mt-5 text-lg font-semibold">No highlights yet</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Add a folder of photos and videos. Subfolders become their own
+                carousel, and files in the root stay as single clips.
               </p>
-              <p className="text-sm text-slate-500">
-                Import a folder to start organizing your pickleball highlights.
-              </p>
-              <button
-                onClick={handleAddFolder}
-                className="mt-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
-              >
-                Add Folder
-              </button>
+              <Button className="mt-6" onClick={() => void handleAddFolder()}>
+                <FolderPlus />
+                Add folder
+              </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {filteredMedia.map((item) => (
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {gallery.map((entry) => (
                 <MediaCard
-                  key={item.id}
-                  media={item}
-                  onSelect={(media) => setSelectedMedia(media)}
+                  key={entry.key}
+                  title={entry.title}
+                  items={entry.items}
+                  grouped={entry.grouped}
+                  onSelect={() =>
+                    setOpenIds(entry.items.map((item) => item.id))
+                  }
                 />
               ))}
             </div>
           )}
         </section>
       </main>
-      {selectedMedia && (
+      {appMenuOpen ? (
+        <AppMenuModal
+          onClose={() => setAppMenuOpen(false)}
+          onDeleteAll={handleDeleteAllMedia}
+        />
+      ) : null}
+      {openItems.length > 0 ? (
         <MediaModal
-          media={selectedMedia}
-          onClose={() => setSelectedMedia(null)}
+          items={openItems}
+          onClose={() => setOpenIds(null)}
           onSave={handleSaveMetadata}
           onDelete={handleDeleteMedia}
         />
-      )}
+      ) : null}
     </div>
   );
 };

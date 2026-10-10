@@ -1,90 +1,193 @@
-import {
-  useEffect,
-  useMemo,
-  useState,
-  useRef,
-  useCallback,
-  KeyboardEvent,
-} from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { ChevronLeft, ChevronRight, Film, ImageIcon, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import VideoJS from "@/components/VideoJS";
-
+import { folderName } from "@/lib/gallery";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input"
 
 import type Player from "video.js/dist/types/player";
 import type { NormalizedMedia } from "@/types/media";
 
 interface MediaModalProps {
-  media: NormalizedMedia;
+  items: NormalizedMedia[];
   onClose: () => void;
   onSave: (
     mediaId: number,
     tagList: string[],
     description: string
   ) => Promise<void>;
-  onDelete: () => Promise<void>;
+  onDelete: (mediaId: number) => Promise<void>;
 }
 
-const MediaModal = ({ media, onClose, onSave, onDelete }: MediaModalProps) => {
+function videoContentType(filename: string): string {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "webm":
+      return "video/webm";
+    case "mov":
+    case "m4v":
+      return "video/quicktime";
+    case "avi":
+      return "video/x-msvideo";
+    default:
+      return "video/mp4";
+  }
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) {
+    return true;
+  }
+  return Boolean(target.closest("video, .video-js"));
+}
+
+const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
   const [tagInput, setTagInput] = useState("");
   const [tagList, setTagList] = useState<string[]>([]);
   const [description, setDescription] = useState("");
-  const fileUrl =
-    media?.fileUrl ?? (media ? encodeURI(`file://${media.filepath}`) : "");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [index, setIndex] = useState(0);
+  const seenIds = useRef("");
+  const mounted = useRef(true);
 
-  const mediaFilename =
-    media.filename && media.filename.length >= 80
-      ? `${media.filename.slice(0, 80)}...`
-      : media.filename;
+  const current = items[index] ?? items[0];
 
   useEffect(() => {
-    if (media?.tags) {
-      setTagList(media.tags.map((t) => t.name));
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const ids = items.map((item) => item.id).join(",");
+    if (ids === seenIds.current) return;
+    const previous = seenIds.current.split(",").filter(Boolean);
+    const subset =
+      previous.length > 0 &&
+      items.every((item) => previous.includes(String(item.id)));
+    seenIds.current = ids;
+    if (!subset) {
+      setIndex(0);
+      return;
     }
-    setDescription(media?.description ?? "");
-  }, [media]);
+    setIndex((value) => Math.min(value, Math.max(items.length - 1, 0)));
+  }, [items]);
 
   useEffect(() => {
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
+    if (!current) return;
+    setTagList(current.tags?.map((tag) => tag.name) ?? []);
+    setDescription(current.description ?? "");
+    setTagInput("");
+  }, [current]);
+
+  const step = (direction: -1 | 1) => {
+    const count = items.length;
+    if (count < 2 || confirmingDelete || isDeleting) return;
+    setConfirmingDelete(false);
+    setDeleteError(null);
+    setIndex((value) => (value + direction + count) % count);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isDeleting) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        if (items.length < 2 || confirmingDelete) return;
+        if (isTypingTarget(event.target)) return;
         event.preventDefault();
-        onClose();
+        step(event.key === "ArrowLeft" ? -1 : 1);
+        return;
       }
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (confirmingDelete) {
+        setConfirmingDelete(false);
+        setDeleteError(null);
+        return;
+      }
+      onClose();
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [confirmingDelete, isDeleting, items, onClose]);
+
+  const fileUrl = current
+    ? current.fileUrl || convertFileSrc(current.filepath)
+    : "";
+  const mediaFilename = current
+    ? current.filename.length >= 80
+      ? `${current.filename.slice(0, 80)}...`
+      : current.filename
+    : "";
+  const groupLabel = (() => {
+    const path = current?.groupPath;
+    if (!path) return null;
+    if (!items.every((item) => item.groupPath === path)) return null;
+    return folderName(path);
+  })();
+
+  const confirmDelete = async () => {
+    if (!current) return;
+    const mediaId = current.id;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDelete(mediaId);
+      if (!mounted.current) return;
+      setConfirmingDelete(false);
+      setIsDeleting(false);
+    } catch (error) {
+      if (!mounted.current) return;
+      setDeleteError(error instanceof Error ? error.message : String(error));
+      setIsDeleting(false);
+    }
+  };
 
   const addTagFromInput = () => {
     const raw = tagInput.trim().toLowerCase();
     if (!raw) return;
-    if (!tagList.includes(raw)) {
-      setTagList([...tagList, raw]);
-    }
+    setTagList((list) => (list.includes(raw) ? list : [...list, raw]));
     setTagInput("");
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" || event.key === ",") {
-      event.preventDefault();
-      addTagFromInput();
+  const saveTags = async () => {
+    if (!current) return;
+    setIsSaving(true);
+    try {
+      await onSave(current.id, tagList, description);
+      if (mounted.current) onClose();
+    } finally {
+      if (mounted.current) setIsSaving(false);
     }
   };
-
-  const removeTag = (tag: string) => {
-    setTagList(tagList.filter((t) => t !== tag));
-  };
-
-  const saveTags = async () => {
-    await onSave(media.id, tagList, description);
-    onClose();
-  };
-
-  const playerRef = useRef<Player | null>(null);
 
   const videoJsOptions = useMemo(
     () => ({
@@ -95,188 +198,231 @@ const MediaModal = ({ media, onClose, onSave, onDelete }: MediaModalProps) => {
       sources: [
         {
           src: fileUrl,
-          type: "video/mp4",
+          type: videoContentType(current?.filename ?? ""),
         },
       ],
     }),
-    [fileUrl]
+    [fileUrl, current?.filename]
   );
 
-  // Explicit container sizing so the player can fill it without relying on Video.js fluid/aspect sizing
-  const videoContainerStyle = useMemo(
-    () => ({
-      aspectRatio: "9 / 16",
-      height: "90vh",
-      maxHeight: "90vh",
-      maxWidth: "min(90vw, calc(90vh * 9 / 16))",
-    }),
-    []
-  );
-
-  const handlePlayerReady = useCallback((player: Player) => {
-    playerRef.current = player;
-
-    // You can handle player events here, for example:
-    player.on("waiting", () => {
+  const handlePlayerReady = (instance: Player) => {
+    instance.on("waiting", () => {
       console.log("player is waiting");
     });
-
-    player.on("dispose", () => {
+    instance.on("dispose", () => {
       console.log("player will dispose");
     });
-  }, []);
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
-      <div className="flex w-auto max-w-[90vw] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl max-h-screen">
-        <header className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <div>
-            <Label className="text-xs uppercase tracking-wide text-slate-500">
-              Preview
-            </Label>
-            <h2 className="text-lg text-slate-900">
-              {mediaFilename}
-            </h2>
+    <>
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open && !confirmingDelete && !isDeleting) onClose();
+        }}
+      >
+        <DialogContent
+          data-testid="media-modal"
+          className="max-h-[92vh] max-w-5xl gap-0 overflow-hidden p-0"
+          onEscapeKeyDown={(event) => {
+            if (confirmingDelete || isDeleting) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (confirmingDelete || isDeleting) event.preventDefault();
+          }}
+        >
+          <div className="flex items-start justify-between gap-4 border-b px-5 py-4 pr-12">
+            <div>
+              <DialogDescription className="text-xs font-medium uppercase tracking-wide text-primary">
+                {groupLabel ?? "Preview"}
+              </DialogDescription>
+              <DialogTitle
+                data-testid="media-filename"
+                className="mt-1 flex items-center gap-2 text-lg"
+              >
+                {current?.mediatype === "VIDEO" ? (
+                  <Film className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                )}
+                {mediaFilename}
+              </DialogTitle>
+            </div>
+            {items.length > 1 ? (
+              <p
+                data-testid="carousel-position"
+                className="pt-1 text-sm font-semibold tabular-nums text-muted-foreground"
+              >
+                {index + 1} / {items.length}
+              </p>
+            ) : null}
           </div>
-          <Button
-            onClick={onClose}
-            className="bg-slate-100 px-3 py-2 text-sm text-slate-600 hover:bg-slate-200"
-          >
-            Close
-          </Button>
-        </header>
-        <div className="grid grid-cols-1 items-start gap-4 overflow-auto md:grid-cols-[minmax(0,1fr)_400px]">
-          <div className="flex items-center justify-center rounded-2xl">
-            <div className="flex w-full items-center justify-center">
-              {media.mediatype === "PHOTO" ? (
+
+          <div className="grid max-h-[calc(92vh-4.5rem)] grid-cols-1 overflow-auto md:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="relative flex min-h-[360px] items-center justify-center bg-court px-14 py-6">
+              {items.length > 1 ? (
+                <button
+                  type="button"
+                  data-testid="carousel-prev"
+                  aria-label="Previous"
+                  className="absolute left-4 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-ball text-ball-foreground shadow-md transition hover:bg-ball/90"
+                  onClick={() => step(-1)}
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+              ) : null}
+              {current?.mediatype === "PHOTO" ? (
                 <img
                   src={fileUrl}
-                  className="h-[80vh] w-full bg-white object-contain shadow-sm"
-                  alt={media.filename}
+                  alt={current.filename}
+                  className="max-h-[62vh] w-full object-contain"
                 />
               ) : (
-                <div
-                  className="overflow-hidden bg-black shadow-sm cursor-pointer"
-                  style={videoContainerStyle}
-                >
+                <div className="aspect-video w-full overflow-hidden rounded-xl bg-black shadow-sm">
                   <VideoJS
+                    key={current?.id}
                     options={videoJsOptions}
                     onReady={handlePlayerReady}
                     className="h-full w-full"
                   />
                 </div>
               )}
-            </div>
-          </div>
-          <div className="flex flex-col gap-6 rounded-2xl bg-white py-4 pr-4 h-full">
-            <div className="grid gap-2 w-full">
-              <Label className="text-xs uppercase tracking-wide text-slate-500">
-                Filepath
-              </Label>
-              <p className="break-all text-sm text-slate-800">
-                {media.filepath}
-              </p>
-            </div>
-
-            <section className="grid w-full gap-2">
-              <Label
-                className="text-xs uppercase tracking-wide text-slate-500"
-                htmlFor="description"
-              >
-                Description
-              </Label>
-              <Textarea
-                placeholder="Add a description"
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="h-40 focus:border-emerald-300 focus:ring-1 focus:ring-emerald-100"
-              />
-            </section>
-
-            <section className="grid w-full gap-4">
-              <Label
-                className="text-xs uppercase tracking-wide text-slate-500"
-                htmlFor="description"
-              >
-                TAGS
-              </Label>
-              <div className="flex flex-wrap gap-2">
-                {tagList.map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700"
-                  >
-                    {tag}
-                    <button
-                      onClick={() => removeTag(tag)}
-                      className="text-xs text-emerald-700 hover:text-emerald-900"
-                    >
-                      ✕
-                    </button>
-                  </span>
-                ))}
-                {!tagList.length && (
-                  <span className="text-[11px] uppercase tracking-wide text-slate-400">
-                    No tags yet
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {/* <input
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Add tag (press Enter or comma)"
-                  className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
-                /> */}
-                <Input
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Add tag (press Enter or comma)"
-                  className="focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100"
-                />
-                <Button
-                  onClick={addTagFromInput}
-                  className="bg-emerald-500 text-white shadow-sm hover:bg-emerald-600"
+              {items.length > 1 ? (
+                <button
+                  type="button"
+                  data-testid="carousel-next"
+                  aria-label="Next"
+                  className="absolute right-4 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-ball text-ball-foreground shadow-md transition hover:bg-ball/90"
+                  onClick={() => step(1)}
                 >
-                  Add
-                </Button>
-              </div>
-            </section>
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              ) : null}
+            </div>
 
-            <footer className="flex justify-between mt-auto">
-              <div>
+            <div className="flex flex-col gap-5 border-t p-5 md:border-l md:border-t-0">
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground">File path</p>
+                <p
+                  data-testid="media-filepath"
+                  className="break-all font-mono text-xs leading-relaxed text-foreground"
+                >
+                  {current?.filepath}
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="media-description">Description</Label>
+                <Textarea
+                  id="media-description"
+                  value={description}
+                  placeholder="Add a description"
+                  className="min-h-28 resize-none"
+                  onChange={(event) => setDescription(event.target.value)}
+                />
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs font-medium text-muted-foreground">Tags</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {tagList.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground"
+                    >
+                      {tag}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${tag}`}
+                        className="rounded-full text-secondary-foreground/70 hover:text-foreground"
+                        onClick={() =>
+                          setTagList((list) => list.filter((item) => item !== tag))
+                        }
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {tagList.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">No tags yet</span>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={tagInput}
+                    placeholder="Add a tag"
+                    onChange={(event) => setTagInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === ",") {
+                        event.preventDefault();
+                        addTagFromInput();
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="secondary" onClick={addTagFromInput}>
+                    Add
+                  </Button>
+                </div>
+              </div>
+
+              <div className="mt-auto flex items-center justify-between gap-2 pt-2">
                 <Button
-                  onClick={onDelete}
+                  type="button"
                   variant="destructive"
-                  className=""
+                  onClick={() => setConfirmingDelete(true)}
                 >
                   Delete
                 </Button>
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" onClick={onClose}>
+                    Cancel
+                  </Button>
+                  <Button type="button" onClick={() => void saveTags()} disabled={isSaving}>
+                    {isSaving ? "Saving..." : "Save"}
+                  </Button>
+                </div>
               </div>
-
-              <div className="flex gap-2">
-                <Button
-                  onClick={onClose}
-                  variant="outline"
-                  className="px-4 py-2 text-sm"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={saveTags}
-                  className="bg-emerald-600 px-4 py-2 text-sm text-white shadow-sm hover:bg-emerald-700"
-                >
-                  Save Changes
-                </Button>
-              </div>
-            </footer>
+            </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={confirmingDelete}
+        onOpenChange={(open) => {
+          if (isDeleting) return;
+          setConfirmingDelete(open);
+          if (!open) setDeleteError(null);
+        }}
+      >
+        <AlertDialogContent data-testid="delete-media-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this media?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you wish to delete {mediaFilename}? This removes it
+              from the library. The file on disk is left in place.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteError ? (
+            <p className="text-sm text-destructive">{deleteError}</p>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmDelete();
+              }}
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 };
 

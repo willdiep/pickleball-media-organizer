@@ -20,6 +20,7 @@ export interface Media {
   filepath: string;
   mediatype: MediaType;
   description: string | null;
+  groupPath: string | null;
   createdAt: Date;
   updatedAt: Date;
   tags: MediaTag[];

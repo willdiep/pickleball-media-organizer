@@ -1,11 +1,16 @@
+import { Badge } from "@/components/ui/badge";
+
 interface TagBadgeProps {
   name: string;
 }
 
 const TagBadge = ({ name }: TagBadgeProps) => (
-  <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+  <Badge
+    variant="secondary"
+    className="rounded-full px-2.5 py-0.5 font-medium capitalize"
+  >
     {name}
-  </span>
+  </Badge>
 );
 
 export default TagBadge;
