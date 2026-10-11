@@ -54,6 +54,15 @@ function videoContentType(filename: string): string {
   }
 }
 
+// Explicit box from before the gallery rebuild, so Video.js fills the clip
+// instead of letterboxing it inside a 16:9 frame.
+const videoContainerStyle = {
+  aspectRatio: "9 / 16",
+  height: "min(90vh, calc(100vh - 6.75rem))",
+  maxHeight: "min(90vh, calc(100vh - 6.75rem))",
+  maxWidth: "min(90vw, calc(min(90vh, 100vh - 6.75rem) * 9 / 16))",
+};
+
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -224,7 +233,7 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
       >
         <DialogContent
           data-testid="media-modal"
-          className="max-h-[92vh] max-w-5xl gap-0 overflow-hidden p-0"
+          className="w-auto max-h-screen max-w-[90vw] gap-0 overflow-hidden p-0 sm:max-w-[90vw]"
           onEscapeKeyDown={(event) => {
             if (confirmingDelete || isDeleting) event.preventDefault();
           }}
@@ -259,8 +268,8 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
             ) : null}
           </div>
 
-          <div className="grid max-h-[calc(92vh-4.5rem)] grid-cols-1 overflow-auto md:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="relative flex min-h-[360px] items-center justify-center bg-court px-14 py-6">
+          <div className="grid grid-cols-1 items-stretch md:grid-cols-[auto_320px]">
+            <div className="relative flex items-center justify-center bg-court">
               {items.length > 1 ? (
                 <button
                   type="button"
@@ -276,10 +285,13 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
                 <img
                   src={fileUrl}
                   alt={current.filename}
-                  className="max-h-[62vh] w-full object-contain"
+                  className="h-[min(80vh,calc(100vh-6.75rem))] w-auto max-w-[min(90vw,calc(100vw-22rem))] object-contain"
                 />
               ) : (
-                <div className="aspect-video w-full overflow-hidden rounded-xl bg-black shadow-sm">
+                <div
+                  className="relative overflow-hidden bg-black shadow-sm"
+                  style={videoContainerStyle}
+                >
                   <VideoJS
                     key={current?.id}
                     options={videoJsOptions}
@@ -301,7 +313,7 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
               ) : null}
             </div>
 
-            <div className="flex flex-col gap-5 border-t p-5 md:border-l md:border-t-0">
+            <div className="flex max-h-[min(90vh,calc(100vh-6.75rem))] flex-col gap-5 overflow-auto border-t p-5 md:border-l md:border-t-0">
               <div className="space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">File path</p>
                 <p
