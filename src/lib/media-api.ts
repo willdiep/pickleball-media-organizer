@@ -5,6 +5,7 @@ import { categoryLabel, type MediaCategory } from "@/lib/categories";
 import type {
   AddFolderResponse,
   DeleteMediaResponse,
+  LibraryRoot,
   MediaListResponse,
   NormalizedMedia,
   Tag,
@@ -20,10 +21,11 @@ type MediaRow = Omit<NormalizedMedia, "fileUrl">;
 const VIDEO_ORIGIN = "http://127.0.0.1:17421";
 
 function withFileUrl(media: MediaRow): NormalizedMedia {
+  const photoSource = media.previewPath || media.filepath;
   const fileUrl =
     media.mediatype === "VIDEO"
       ? `${VIDEO_ORIGIN}/media?path=${encodeURIComponent(media.filepath)}`
-      : convertFileSrc(media.filepath);
+      : convertFileSrc(photoSource);
   return {
     ...media,
     fileUrl,
@@ -31,10 +33,15 @@ function withFileUrl(media: MediaRow): NormalizedMedia {
 }
 
 export async function listMedia(): Promise<MediaListResponse> {
-  const result = await invoke<{ media: MediaRow[]; tags: Tag[] }>("list_media");
+  const result = await invoke<{
+    media: MediaRow[];
+    tags: Tag[];
+    roots: LibraryRoot[];
+  }>("list_media");
   return {
     media: result.media.map(withFileUrl),
     tags: result.tags,
+    roots: result.roots,
   };
 }
 
@@ -56,6 +63,7 @@ export async function addFolder(
     skipped: number;
     media: MediaRow[];
     tags: Tag[];
+    roots: LibraryRoot[];
   }>("ingest_folder", { directory: selected, category });
 
   return {
@@ -64,7 +72,46 @@ export async function addFolder(
     skipped: result.skipped,
     media: result.media.map(withFileUrl),
     tags: result.tags,
+    roots: result.roots,
   };
+}
+
+export async function rescanRoot(rootId: number): Promise<AddFolderResponse> {
+  const result = await invoke<{
+    imported: number;
+    alreadyPresent: number;
+    skipped: number;
+    missing: number;
+    media: MediaRow[];
+    tags: Tag[];
+    roots: LibraryRoot[];
+  }>("rescan_root", { rootId });
+  return {
+    imported: result.imported,
+    alreadyPresent: result.alreadyPresent,
+    skipped: result.skipped,
+    missing: result.missing,
+    media: result.media.map(withFileUrl),
+    tags: result.tags,
+    roots: result.roots,
+  };
+}
+
+export async function removeRoot(rootId: number): Promise<DeleteMediaResponse> {
+  const result = await invoke<{
+    media: MediaRow[];
+    tags: Tag[];
+    roots: LibraryRoot[];
+  }>("remove_root", { rootId });
+  return {
+    media: result.media.map(withFileUrl),
+    tags: result.tags,
+    roots: result.roots,
+  };
+}
+
+export async function revealMedia(mediaId: number): Promise<void> {
+  await invoke("reveal_media", { mediaId });
 }
 
 export async function updateTags(
@@ -90,22 +137,27 @@ export async function updateDescription(
 }
 
 export async function deleteAllMedia(): Promise<DeleteMediaResponse> {
-  const result = await invoke<{ media: MediaRow[]; tags: Tag[] }>(
-    "delete_all_media"
-  );
+  const result = await invoke<{
+    media: MediaRow[];
+    tags: Tag[];
+    roots: LibraryRoot[];
+  }>("delete_all_media");
   return {
     media: result.media.map(withFileUrl),
     tags: result.tags,
+    roots: result.roots,
   };
 }
 
 export async function deleteMedia(mediaId: number): Promise<DeleteMediaResponse> {
-  const result = await invoke<{ media: MediaRow[]; tags: Tag[] }>(
-    "delete_media",
-    { mediaId }
-  );
+  const result = await invoke<{
+    media: MediaRow[];
+    tags: Tag[];
+    roots: LibraryRoot[];
+  }>("delete_media", { mediaId });
   return {
     media: result.media.map(withFileUrl),
     tags: result.tags,
+    roots: result.roots,
   };
 }

@@ -3,7 +3,8 @@ import { ChevronLeft, ChevronRight, Film, ImageIcon, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import VideoJS from "@/components/VideoJS";
-import { folderName } from "@/lib/gallery";
+import { folderName, formatLibraryTime } from "@/lib/gallery";
+import * as mediaApi from "@/lib/media-api";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -80,6 +81,7 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [pathError, setPathError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
   const seenIds = useRef("");
   const mounted = useRef(true);
@@ -113,6 +115,7 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
     setTagList(current.tags?.map((tag) => tag.name) ?? []);
     setDescription(current.description ?? "");
     setTagInput("");
+    setPathError(null);
   }, [current]);
 
   const step = (direction: -1 | 1) => {
@@ -257,6 +260,15 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
                 )}
                 {mediaFilename}
               </DialogTitle>
+              {current?.fileModifiedAt ? (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {formatLibraryTime(current.fileModifiedAt)}
+                </p>
+              ) : current?.createdAt ? (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Imported {formatLibraryTime(String(current.createdAt))}
+                </p>
+              ) : null}
             </div>
             {items.length > 1 ? (
               <p
@@ -281,7 +293,25 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
                   <ChevronLeft className="h-5 w-5" />
                 </button>
               ) : null}
-              {current?.mediatype === "PHOTO" ? (
+              {current?.fileMissing ? (
+                <div className="grid h-[min(50vh,24rem)] max-w-md place-items-center px-8 text-center text-court-foreground">
+                  <div>
+                    <p className="text-base font-medium">{current.filename}</p>
+                    <p className="mt-2 text-sm text-court-foreground/80">
+                      This file is no longer at the stored path.
+                    </p>
+                  </div>
+                </div>
+              ) : current?.previewUnavailable ? (
+                <div className="grid h-[min(50vh,24rem)] max-w-md place-items-center px-8 text-center text-court-foreground">
+                  <div>
+                    <p className="text-base font-medium">{current.filename}</p>
+                    <p className="mt-2 text-sm text-court-foreground/80">
+                      Preview unavailable
+                    </p>
+                  </div>
+                </div>
+              ) : current?.mediatype === "PHOTO" ? (
                 <img
                   src={fileUrl}
                   alt={current.filename}
@@ -322,6 +352,43 @@ const MediaModal = ({ items, onClose, onSave, onDelete }: MediaModalProps) => {
                 >
                   {current?.filepath}
                 </p>
+                <div className="flex gap-2 pt-1">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      if (!current) return;
+                      setPathError(null);
+                      void mediaApi.revealMedia(current.id).catch((error: unknown) => {
+                        setPathError(
+                          error instanceof Error ? error.message : String(error)
+                        );
+                      });
+                    }}
+                  >
+                    Reveal
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      if (!current) return;
+                      void navigator.clipboard
+                        .writeText(current.filepath)
+                        .then(() => setPathError(null))
+                        .catch((error: unknown) => {
+                          setPathError(
+                            error instanceof Error ? error.message : String(error)
+                          );
+                        });
+                    }}
+                  >
+                    Copy path
+                  </Button>
+                </div>
+                {pathError ? (
+                  <p className="text-sm text-destructive">{pathError}</p>
+                ) : null}
               </div>
 
               <div className="space-y-1.5">

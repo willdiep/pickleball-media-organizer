@@ -25,6 +25,11 @@ pub struct MediaRecord {
     pub description: Option<String>,
     pub group_path: Option<String>,
     pub category: String,
+    pub root_id: Option<i64>,
+    pub file_modified_at: Option<String>,
+    pub file_missing: bool,
+    pub preview_path: Option<String>,
+    pub preview_unavailable: bool,
     pub created_at: String,
     pub updated_at: String,
     pub tags: Vec<TagRecord>,
@@ -35,6 +40,7 @@ pub struct MediaRecord {
 pub struct LibraryPayload {
     pub media: Vec<MediaRecord>,
     pub tags: Vec<TagRecord>,
+    pub roots: Vec<RootRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +51,33 @@ pub struct IngestPayload {
     pub skipped: i64,
     pub media: Vec<MediaRecord>,
     pub tags: Vec<TagRecord>,
+    pub roots: Vec<RootRecord>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootRecord {
+    pub id: i64,
+    pub path: String,
+    pub media_count: i64,
+}
+
+#[derive(Debug)]
+pub struct IngestOutcome {
+    pub imported: i64,
+    pub already_present: i64,
+    pub skipped: i64,
+    pub root_id: i64,
+    pub seen: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RescanOutcome {
+    pub imported: i64,
+    pub already_present: i64,
+    pub skipped: i64,
+    pub missing: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -78,7 +111,7 @@ pub fn open_database() -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
+pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     let media_exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'Media'",
         [],
@@ -114,6 +147,15 @@ fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     if category_exists == 0 {
         conn.execute_batch(include_str!("../migrations/004_category.sql"))?;
     }
+
+    let root_table_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'LibraryRoot'",
+        [],
+        |row| row.get(0),
+    )?;
+    if root_table_exists == 0 {
+        conn.execute_batch(include_str!("../migrations/005_library_root.sql"))?;
+    }
     Ok(())
 }
 
@@ -121,6 +163,7 @@ pub fn list_library(conn: &Connection) -> rusqlite::Result<LibraryPayload> {
     Ok(LibraryPayload {
         media: load_media(conn)?,
         tags: load_tags(conn)?,
+        roots: list_roots(conn)?,
     })
 }
 
@@ -203,6 +246,7 @@ pub fn delete_all_media(conn: &Connection) -> rusqlite::Result<LibraryPayload> {
     tx.execute("DELETE FROM MediaTag", [])?;
     tx.execute("DELETE FROM Media", [])?;
     tx.execute("DELETE FROM Tag", [])?;
+    tx.execute("DELETE FROM LibraryRoot", [])?;
     tx.commit()?;
     list_library(conn)
 }
@@ -212,7 +256,7 @@ pub fn ingest_directory(
     directory: &Path,
     category: &str,
     mut on_progress: impl FnMut(IngestProgress),
-) -> rusqlite::Result<(i64, i64, i64)> {
+) -> rusqlite::Result<IngestOutcome> {
     if !directory.is_dir() {
         return Err(rusqlite::Error::InvalidParameterName(format!(
             "Not a directory: {}",
@@ -221,12 +265,15 @@ pub fn ingest_directory(
     }
     let category = require_category(category)?;
 
+    let canonical = fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
     let mut imported = 0_i64;
     let mut already_present = 0_i64;
     let mut skipped = 0_i64;
     let mut scanned = 0_u64;
+    let mut seen = Vec::new();
     let tx = conn.unchecked_transaction()?;
-    for entry in WalkDir::new(directory).into_iter().filter_map(Result::ok) {
+    let root_id = upsert_root(&tx, &canonical)?;
+    for entry in WalkDir::new(&canonical).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -255,32 +302,43 @@ pub fn ingest_directory(
             continue;
         };
         let filepath = path.to_string_lossy().to_string();
-        let existed: bool = tx
+        let existing_uuid: Option<String> = tx
             .query_row(
-                "SELECT 1 FROM Media WHERE filepath = ?1",
+                "SELECT uuid FROM Media WHERE filepath = ?1",
                 [&filepath],
-                |_| Ok(()),
+                |row| row.get(0),
             )
-            .optional()?
-            .is_some();
+            .optional()?;
+        let existed = existing_uuid.is_some();
+        let uuid = existing_uuid.unwrap_or_else(|| Uuid::new_v4().to_string());
+        if is_heif(path) {
+            write_heic_preview(path, &uuid);
+        }
         let group_path =
-            group_path_for(directory, path).map(|group| group.to_string_lossy().into_owned());
+            group_path_for(&canonical, path).map(|group| group.to_string_lossy().into_owned());
+        let modified = file_modified_stamp(path);
         tx.execute(
-            "INSERT INTO Media (uuid, filename, filepath, mediatype, group_path, category, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
-             ON CONFLICT(filepath) DO UPDATE SET group_path = excluded.group_path, category = excluded.category",
+            "INSERT INTO Media (uuid, filename, filepath, mediatype, group_path, category, root_id, file_modified_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'))
+             ON CONFLICT(filepath) DO UPDATE SET
+               group_path = excluded.group_path,
+               category = excluded.category,
+               root_id = excluded.root_id,
+               file_modified_at = excluded.file_modified_at",
             params![
-                Uuid::new_v4().to_string(),
+                uuid,
                 filename,
                 filepath,
                 mediatype,
                 group_path,
-                category
+                category,
+                root_id,
+                modified
             ],
         )?;
-        // A conflicting filepath keeps its tags and description. group_path and
-        // category are refreshed so importing the same folder again can attach
-        // grouping and file it under the selected library.
+        // A conflicting filepath keeps its tags, description, uuid, and created_at.
+        // group_path, category, folder, and file time are refreshed.
+        seen.push(filepath);
         if existed {
             already_present += 1;
         } else {
@@ -301,7 +359,181 @@ pub fn ingest_directory(
         already_present: already_present as u64,
         skipped: skipped as u64,
     });
-    Ok((imported, already_present, skipped))
+    Ok(IngestOutcome {
+        imported,
+        already_present,
+        skipped,
+        root_id,
+        seen,
+    })
+}
+
+pub fn list_roots(conn: &Connection) -> rusqlite::Result<Vec<RootRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.path, COUNT(m.id)
+         FROM LibraryRoot r
+         LEFT JOIN Media m ON m.root_id = r.id
+         GROUP BY r.id
+         ORDER BY r.path ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(RootRecord {
+            id: row.get(0)?,
+            path: row.get(1)?,
+            media_count: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn rescan_root(
+    conn: &Connection,
+    root_id: i64,
+    on_progress: impl FnMut(IngestProgress),
+) -> rusqlite::Result<RescanOutcome> {
+    let path: String = conn.query_row(
+        "SELECT path FROM LibraryRoot WHERE id = ?1",
+        [root_id],
+        |row| row.get(0),
+    )?;
+    let category: String = conn
+        .query_row(
+            "SELECT category FROM Media WHERE root_id = ?1 LIMIT 1",
+            [root_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "pickleball".to_string());
+    let outcome = ingest_directory(conn, Path::new(&path), &category, on_progress)?;
+    let missing = count_missing(conn, outcome.root_id, &outcome.seen)?;
+    Ok(RescanOutcome {
+        imported: outcome.imported,
+        already_present: outcome.already_present,
+        skipped: outcome.skipped,
+        missing,
+    })
+}
+
+pub fn remove_root(conn: &Connection, root_id: i64) -> rusqlite::Result<LibraryPayload> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "DELETE FROM MediaTag WHERE mediaId IN (SELECT id FROM Media WHERE root_id = ?1)",
+        [root_id],
+    )?;
+    tx.execute("DELETE FROM Media WHERE root_id = ?1", [root_id])?;
+    tx.execute(
+        "DELETE FROM Tag WHERE id NOT IN (SELECT tagId FROM MediaTag)",
+        [],
+    )?;
+    tx.execute("DELETE FROM LibraryRoot WHERE id = ?1", [root_id])?;
+    tx.commit()?;
+    list_library(conn)
+}
+
+pub fn media_filepath(conn: &Connection, media_id: i64) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT filepath FROM Media WHERE id = ?1",
+        [media_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn upsert_root(conn: &Connection, directory: &Path) -> rusqlite::Result<i64> {
+    let path = directory.to_string_lossy().to_string();
+    conn.execute(
+        "INSERT INTO LibraryRoot (path) VALUES (?1) ON CONFLICT(path) DO NOTHING",
+        [&path],
+    )?;
+    conn.query_row(
+        "SELECT id FROM LibraryRoot WHERE path = ?1",
+        [&path],
+        |row| row.get(0),
+    )
+}
+
+fn count_missing(conn: &Connection, root_id: i64, seen: &[String]) -> rusqlite::Result<i64> {
+    conn.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS ingest_seen (path TEXT PRIMARY KEY)",
+        [],
+    )?;
+    conn.execute("DELETE FROM ingest_seen", [])?;
+    for path in seen {
+        conn.execute("INSERT INTO ingest_seen (path) VALUES (?1)", [path])?;
+    }
+    conn.query_row(
+        "SELECT COUNT(*) FROM Media
+         WHERE root_id = ?1
+           AND filepath NOT IN (SELECT path FROM ingest_seen)",
+        [root_id],
+        |row| row.get(0),
+    )
+}
+
+pub fn preview_directory() -> PathBuf {
+    let dir = database_file()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("previews");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
+fn preview_path_for(uuid: &str) -> PathBuf {
+    preview_directory().join(format!("{uuid}.jpg"))
+}
+
+fn write_heic_preview(source: &Path, uuid: &str) {
+    let dest = preview_path_for(uuid);
+    if dest.is_file() {
+        return;
+    }
+    if let Some(parent) = dest.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if !run_converter("heif-convert", source, &dest) {
+        let _ = fs::remove_file(&dest);
+    }
+}
+
+fn run_converter(program: &str, source: &Path, dest: &Path) -> bool {
+    let Ok(status) = std::process::Command::new(program)
+        .arg(source)
+        .arg(dest)
+        .status()
+    else {
+        return false;
+    };
+    status.success() && dest.is_file()
+}
+
+fn file_modified_stamp(path: &Path) -> Option<String> {
+    let modified = fs::metadata(path).ok()?.modified().ok()?;
+    let secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(format_unix_utc(secs))
+}
+
+fn format_unix_utc(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let tod = secs % 86_400;
+    let hour = tod / 3600;
+    let minute = (tod % 3600) / 60;
+    let second = tod % 60;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let year_of_era = yoe as i64;
+    let y = year_of_era + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
 }
 
 fn report_scan(
@@ -342,7 +574,7 @@ pub fn stored_directories(conn: &Connection) -> rusqlite::Result<Vec<PathBuf>> {
 
 fn load_media(conn: &Connection) -> rusqlite::Result<Vec<MediaRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, uuid, filename, filepath, mediatype, description, created_at, updated_at, group_path, category
+        "SELECT id, uuid, filename, filepath, mediatype, description, created_at, updated_at, group_path, category, root_id, file_modified_at
          FROM Media
          ORDER BY
            CASE typeof(created_at)
@@ -353,15 +585,29 @@ fn load_media(conn: &Connection) -> rusqlite::Result<Vec<MediaRecord>> {
            id DESC",
     )?;
     let rows = stmt.query_map([], |row| {
+        let uuid: String = row.get(1)?;
+        let filepath: String = row.get(3)?;
+        let file_missing = !Path::new(&filepath).exists();
+        let preview = preview_path_for(&uuid);
+        let preview_path = preview
+            .is_file()
+            .then(|| preview.to_string_lossy().into_owned());
+        let preview_unavailable =
+            !file_missing && preview_path.is_none() && is_heif(Path::new(&filepath));
         Ok(MediaRecord {
             id: row.get(0)?,
-            uuid: row.get(1)?,
+            uuid,
             filename: row.get(2)?,
-            filepath: row.get(3)?,
+            filepath,
             mediatype: row.get(4)?,
             description: row.get(5)?,
             group_path: row.get(8)?,
             category: row.get(9)?,
+            root_id: row.get(10)?,
+            file_modified_at: row.get(11)?,
+            file_missing,
+            preview_path,
+            preview_unavailable,
             created_at: read_timestamp(row, 6)?,
             updated_at: read_timestamp(row, 7)?,
             tags: Vec::new(),
@@ -439,11 +685,21 @@ fn require_category(category: &str) -> rusqlite::Result<&'static str> {
     }
 }
 
+fn is_heif(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase())
+            .as_deref(),
+        Some("heic") | Some("heif")
+    )
+}
+
 fn infer_media_type(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "mp4" | "mov" | "m4v" | "webm" | "avi" => Some("VIDEO"),
-        "jpg" | "jpeg" | "png" | "gif" | "webp" => Some("PHOTO"),
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "heic" | "heif" => Some("PHOTO"),
         _ => None,
     }
 }
@@ -464,6 +720,8 @@ mod tests {
             .unwrap();
         conn.execute_batch(include_str!("../migrations/004_category.sql"))
             .unwrap();
+        conn.execute_batch(include_str!("../migrations/005_library_root.sql"))
+            .unwrap();
         conn.execute(
             "INSERT INTO Media (uuid, filename, filepath, mediatype, created_at, updated_at, description)
              VALUES ('id-1', 'rally.png', '/tmp/rally.png', 'PHOTO', datetime('now'), datetime('now'), 'note')",
@@ -473,6 +731,8 @@ mod tests {
         conn.execute("INSERT INTO Tag (name) VALUES ('rally')", [])
             .unwrap();
         conn.execute("INSERT INTO MediaTag (mediaId, tagId) VALUES (1, 1)", [])
+            .unwrap();
+        conn.execute("INSERT INTO LibraryRoot (path) VALUES ('/tmp/library')", [])
             .unwrap();
 
         let library = delete_all_media(&conn).unwrap();
@@ -491,6 +751,11 @@ mod tests {
         assert_eq!(media_count, 0);
         assert_eq!(tag_count, 0);
         assert_eq!(link_count, 0);
+        let root_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM LibraryRoot", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(root_count, 0);
+        assert!(library.roots.is_empty());
     }
 
     #[test]
@@ -510,17 +775,21 @@ mod tests {
         fs::write(&a1, b"png").unwrap();
         fs::write(root.join("rally-a").join("nested").join("a2.png"), b"png").unwrap();
         fs::write(root.join("rally-b").join("b1.png"), b"png").unwrap();
+        let stored_a1 = fs::canonicalize(&a1).unwrap();
 
         conn.execute(
             "INSERT INTO Media (uuid, filename, filepath, mediatype, description, group_path, created_at, updated_at)
              VALUES ('keep-a1', 'a1.png', ?1, 'PHOTO', 'keep me', NULL, datetime('now'), datetime('now'))",
-            [a1.to_string_lossy().to_string()],
+            [stored_a1.to_string_lossy().to_string()],
         )
         .unwrap();
 
         let mut progress = Vec::new();
-        let (imported, already_present, skipped) =
+        let outcome =
             ingest_directory(&conn, &root, "pickleball", |event| progress.push(event)).unwrap();
+        let imported = outcome.imported;
+        let already_present = outcome.already_present;
+        let skipped = outcome.skipped;
         assert_eq!(imported, 3);
         assert_eq!(already_present, 1);
         assert_eq!(skipped, 1);
@@ -565,11 +834,10 @@ mod tests {
         assert!(media.iter().all(|item| item.filename != "notes.txt"));
         assert!(media.iter().all(|item| item.category == "pickleball"));
 
-        let (imported_again, already_again, skipped_again) =
-            ingest_directory(&conn, &root, "pickleball", |_| {}).unwrap();
-        assert_eq!(imported_again, 0);
-        assert_eq!(already_again, 4);
-        assert_eq!(skipped_again, 1);
+        let again_counts = ingest_directory(&conn, &root, "pickleball", |_| {}).unwrap();
+        assert_eq!(again_counts.imported, 0);
+        assert_eq!(again_counts.already_present, 4);
+        assert_eq!(again_counts.skipped, 1);
         let again = load_media(&conn).unwrap();
         assert_eq!(again.len(), 4);
         assert_eq!(
@@ -621,22 +889,22 @@ mod tests {
         fs::write(pickleball.join("rally.png"), b"png").unwrap();
         let stretch = exercises.join("stretch.png");
         fs::write(&stretch, b"png").unwrap();
+        let stored_stretch = fs::canonicalize(&stretch).unwrap();
 
         conn.execute(
             "INSERT INTO Media (uuid, filename, filepath, mediatype, description, category, created_at, updated_at)
              VALUES ('keep-stretch', 'stretch.png', ?1, 'PHOTO', 'keep me', 'exercises', datetime('now'), datetime('now'))",
-            [stretch.to_string_lossy().to_string()],
+            [stored_stretch.to_string_lossy().to_string()],
         )
         .unwrap();
 
-        let (pickleball_imported, pickleball_present, _) =
+        let pickleball_outcome =
             ingest_directory(&conn, &pickleball, "pickleball", |_| {}).unwrap();
-        let (exercises_imported, exercises_present, _) =
-            ingest_directory(&conn, &exercises, "exercises", |_| {}).unwrap();
-        assert_eq!(pickleball_imported, 1);
-        assert_eq!(pickleball_present, 0);
-        assert_eq!(exercises_imported, 0);
-        assert_eq!(exercises_present, 1);
+        let exercises_outcome = ingest_directory(&conn, &exercises, "exercises", |_| {}).unwrap();
+        assert_eq!(pickleball_outcome.imported, 1);
+        assert_eq!(pickleball_outcome.already_present, 0);
+        assert_eq!(exercises_outcome.imported, 0);
+        assert_eq!(exercises_outcome.already_present, 1);
 
         let media = load_media(&conn).unwrap();
         assert_eq!(media.len(), 2);
@@ -694,11 +962,11 @@ mod tests {
         fs::write(root.join("notes.txt"), b"skip").unwrap();
 
         let mut progress = Vec::new();
-        let (imported, already_present, skipped) =
+        let outcome =
             ingest_directory(&conn, &root, "pickleball", |event| progress.push(event)).unwrap();
-        assert_eq!(imported, 25);
-        assert_eq!(already_present, 0);
-        assert_eq!(skipped, 1);
+        assert_eq!(outcome.imported, 25);
+        assert_eq!(outcome.already_present, 0);
+        assert_eq!(outcome.skipped, 1);
         assert!(
             progress.len() >= 2,
             "expected a mid-walk event and a final event, got {}",
@@ -709,6 +977,185 @@ mod tests {
         assert_eq!(last.scanned, 26);
         assert_eq!(last.imported, 25);
         assert_eq!(last.skipped, 1);
+    }
+
+    #[test]
+    fn format_unix_utc_formats_a_known_instant() {
+        assert_eq!(format_unix_utc(1_700_000_000), "2023-11-14 22:13:20");
+    }
+
+    #[test]
+    fn ingest_tracks_root_file_time_rescan_and_removal() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let root = std::env::temp_dir().join(format!("pickleball-root-{}", Uuid::new_v4()));
+        let other = std::env::temp_dir().join(format!("pickleball-other-{}", Uuid::new_v4()));
+        let _root_guard = scopeguard(&root);
+        let _other_guard = scopeguard(&other);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&other).unwrap();
+
+        let older = root.join("older.png");
+        let newer = root.join("newer.png");
+        fs::write(&older, b"png").unwrap();
+        fs::write(&newer, b"png").unwrap();
+        fs::File::open(&older)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+            .unwrap();
+        fs::File::open(&newer)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000))
+            .unwrap();
+        fs::write(other.join("keep.png"), b"png").unwrap();
+
+        let first = ingest_directory(&conn, &root, "pickleball", |_| {}).unwrap();
+        assert_eq!(first.imported, 2);
+        let roots = list_roots(&conn).unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].media_count, 2);
+
+        let media = load_media(&conn).unwrap();
+        let older_row = media
+            .iter()
+            .find(|item| item.filename == "older.png")
+            .unwrap();
+        let newer_row = media
+            .iter()
+            .find(|item| item.filename == "newer.png")
+            .unwrap();
+        assert_eq!(
+            older_row.file_modified_at.as_deref(),
+            Some("2023-11-14 22:13:20")
+        );
+        assert_eq!(
+            newer_row.file_modified_at.as_deref(),
+            Some(format_unix_utc(1_800_000_000).as_str())
+        );
+        assert!(older_row.file_modified_at < newer_row.file_modified_at);
+        assert!(!older_row.file_missing);
+        let created_at = older_row.created_at.clone();
+
+        conn.execute(
+            "UPDATE Media SET description = 'keep me' WHERE filename = 'older.png'",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO Tag (name) VALUES ('rally')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO MediaTag (mediaId, tagId)
+             SELECT id, 1 FROM Media WHERE filename = 'older.png'",
+            [],
+        )
+        .unwrap();
+        fs::File::open(&older)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000))
+            .unwrap();
+        let rescanned = rescan_root(&conn, first.root_id, |_| {}).unwrap();
+        assert_eq!(rescanned.imported, 0);
+        assert_eq!(rescanned.already_present, 2);
+        assert_eq!(rescanned.missing, 0);
+        let kept = load_media(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.filename == "older.png")
+            .unwrap();
+        assert_eq!(kept.description.as_deref(), Some("keep me"));
+        assert_eq!(
+            kept.tags
+                .iter()
+                .map(|tag| tag.name.as_str())
+                .collect::<Vec<_>>(),
+            ["rally"]
+        );
+        assert_eq!(kept.created_at, created_at);
+        assert_eq!(
+            kept.file_modified_at.as_deref(),
+            Some(format_unix_utc(1_800_000_000).as_str())
+        );
+
+        fs::write(root.join("added.png"), b"png").unwrap();
+        fs::remove_file(&newer).unwrap();
+        let gained = rescan_root(&conn, first.root_id, |_| {}).unwrap();
+        assert_eq!(gained.imported, 1);
+        assert_eq!(gained.missing, 1);
+        let after = load_media(&conn).unwrap();
+        assert_eq!(after.len(), 3);
+        let missing = after
+            .iter()
+            .find(|item| item.filename == "newer.png")
+            .unwrap();
+        assert!(missing.file_missing);
+        assert!(after.iter().any(|item| item.filename == "added.png"));
+
+        ingest_directory(&conn, &other, "pickleball", |_| {}).unwrap();
+        let removed = remove_root(&conn, first.root_id).unwrap();
+        assert!(removed.tags.iter().all(|tag| tag.name != "rally"));
+        assert!(
+            removed
+                .media
+                .iter()
+                .all(|item| item.filename != "older.png")
+        );
+        assert!(removed.media.iter().any(|item| item.filename == "keep.png"));
+        assert_eq!(removed.roots.len(), 1);
+        assert!(older.exists());
+        assert!(root.join("added.png").exists());
+    }
+
+    #[test]
+    fn heic_imports_even_when_preview_conversion_fails() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let root = std::env::temp_dir().join(format!("pickleball-heic-{}", Uuid::new_v4()));
+        let _guard = scopeguard(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("shot.heic"), b"not-a-real-heic").unwrap();
+        fs::write(root.join("notes.txt"), b"skip").unwrap();
+        fs::write(root.join("plain.png"), b"png").unwrap();
+
+        let outcome = ingest_directory(&conn, &root, "pickleball", |_| {}).unwrap();
+        assert_eq!(outcome.imported, 2);
+        assert_eq!(outcome.skipped, 1);
+        let media = load_media(&conn).unwrap();
+        let heic = media
+            .iter()
+            .find(|item| item.filename == "shot.heic")
+            .unwrap();
+        assert_eq!(heic.mediatype, "PHOTO");
+        assert!(!heic.file_missing);
+        if heic.preview_path.is_some() {
+            assert!(!heic.preview_unavailable);
+        } else {
+            assert!(heic.preview_unavailable);
+        }
+        assert!(media.iter().any(|item| item.filename == "plain.png"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn converter_writes_a_jpeg_when_the_program_succeeds() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("pickleball-convert-{}", Uuid::new_v4()));
+        let _guard = scopeguard(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("heif-convert");
+        fs::write(&program, "#!/bin/sh\nprintf '\\xff\\xd8' > \"$2\"\n").unwrap();
+        let mut permissions = fs::metadata(&program).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&program, permissions).unwrap();
+        let source = dir.join("shot.heic");
+        fs::write(&source, b"heic").unwrap();
+        let dest = dir.join("out.jpg");
+        assert!(run_converter(&program.to_string_lossy(), &source, &dest));
+        assert!(dest.is_file());
     }
 
     fn scopeguard(path: &Path) -> impl Drop {
