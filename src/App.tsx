@@ -7,9 +7,19 @@ import MediaCard from "@/components/MediaCard";
 import MediaModal from "@/components/MediaModal";
 import Sidebar from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { categoryLabel, type MediaCategory } from "@/lib/categories";
-import { buildGalleryEntries, folderName } from "@/lib/gallery";
+import {
+  buildGalleryEntries,
+  filterMedia,
+  folderName,
+  libraryGridState,
+  shouldClearSearch,
+  type GallerySort,
+  type MediaTypeFilter,
+} from "@/lib/gallery";
 import * as mediaApi from "@/lib/media-api";
+import { cn } from "@/lib/utils";
 
 import type {
   AddFolderResponse,
@@ -19,6 +29,19 @@ import type {
   Tag,
 } from "./types/media";
 
+const TYPE_OPTIONS: Array<{ value: MediaTypeFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "PHOTO", label: "Photos" },
+  { value: "VIDEO", label: "Videos" },
+];
+
+const SORT_OPTIONS: Array<{ value: GallerySort; label: string }> = [
+  { value: "newest", label: "Newest" },
+  { value: "oldest", label: "Oldest" },
+  { value: "name-asc", label: "Name A–Z" },
+  { value: "name-desc", label: "Name Z–A" },
+];
+
 const App = () => {
   const [media, setMedia] = useState<NormalizedMedia[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -27,6 +50,10 @@ const App = () => {
   const [roots, setRoots] = useState<LibraryRoot[]>([]);
   const [diskChange, setDiskChange] = useState<LibraryRoot | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [mediaType, setMediaType] = useState<MediaTypeFilter>("all");
+  const [sort, setSort] = useState<GallerySort>("newest");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [openIds, setOpenIds] = useState<number[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
@@ -99,20 +126,44 @@ const App = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        !shouldClearSearch(
+          event.key,
+          query,
+          event.target === searchRef.current
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setQuery("");
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [query]);
+
   const categoryMedia = useMemo(
     () => media.filter((item) => item.category === selectedCategory),
     [media, selectedCategory]
   );
 
-  const gallery = useMemo(() => {
-    const entries = buildGalleryEntries(categoryMedia);
-    if (!selectedTag) return entries;
-    return entries.filter((entry) =>
-      entry.items.some((item) =>
-        item.tags?.some((itemTag) => itemTag.name === selectedTag)
-      )
-    );
-  }, [categoryMedia, selectedTag]);
+  const visibleMedia = useMemo(
+    () =>
+      filterMedia(categoryMedia, {
+        selectedTag,
+        mediaType,
+        query,
+      }),
+    [categoryMedia, selectedTag, mediaType, query]
+  );
+
+  const gallery = useMemo(
+    () => buildGalleryEntries(visibleMedia, sort),
+    [visibleMedia, sort]
+  );
 
   const openItems = useMemo(() => {
     if (!openIds) return [];
@@ -123,7 +174,12 @@ const App = () => {
     });
   }, [media, openIds]);
 
-  const visibleCount = gallery.reduce((sum, entry) => sum + entry.items.length, 0);
+  const visibleCount = visibleMedia.length;
+  const gridState = libraryGridState(
+    isLoading,
+    categoryMedia.length,
+    visibleCount
+  );
 
   const categoryCounts = useMemo(() => {
     const counts: Record<MediaCategory, number> = {
@@ -280,8 +336,8 @@ const App = () => {
         onSelectTag={setSelectedTag}
       />
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-4 px-8 py-5">
-          <div>
+        <header className="flex flex-wrap items-start justify-between gap-4 px-8 py-5">
+          <div className="min-w-0">
             <p className="text-sm text-muted-foreground">Library</p>
             <h1 className="text-2xl font-semibold tracking-tight">
               {categoryLabel(selectedCategory)}
@@ -320,22 +376,77 @@ const App = () => {
               </div>
             ) : null}
           </div>
-          <Button onClick={() => void handleAddFolder()} disabled={isAdding}>
-            {isAdding ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <FolderPlus />
-            )}
-            {isAdding ? "Importing" : "Add folder"}
-          </Button>
+          <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+            <label htmlFor="library-search" className="sr-only">
+              Search
+            </label>
+            <Input
+              ref={searchRef}
+              id="library-search"
+              value={query}
+              placeholder="Search files, tags, descriptions"
+              onChange={(event) => setQuery(event.target.value)}
+              className="w-56"
+            />
+            <div
+              role="group"
+              aria-label="Media type"
+              className="flex h-9 items-center rounded-md border border-input p-0.5"
+            >
+              {TYPE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={mediaType === option.value}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-sm",
+                    mediaType === option.value
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setMediaType(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <label htmlFor="library-sort" className="sr-only">
+              Sort
+            </label>
+            <select
+              id="library-sort"
+              aria-label="Sort"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as GallerySort)}
+              className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <Button
+              className="shrink-0"
+              onClick={() => void handleAddFolder()}
+              disabled={isAdding}
+            >
+              {isAdding ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <FolderPlus />
+              )}
+              {isAdding ? "Importing" : "Add folder"}
+            </Button>
+          </div>
         </header>
         <section className="scrollbar-light flex-1 overflow-auto px-8 pb-8">
-          {isLoading ? (
+          {gridState === "loading" ? (
             <div className="flex h-full items-center justify-center text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Loading media
             </div>
-          ) : categoryMedia.length === 0 ? (
+          ) : gridState === "empty" ? (
             <div className="mx-auto mt-16 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-border bg-card px-8 py-12 text-center shadow-sm">
               <span className="grid h-14 w-14 place-items-center rounded-full bg-ball">
                 <span className="h-4 w-4 rounded-full bg-court" />
@@ -359,28 +470,26 @@ const App = () => {
                 {isAdding ? "Importing" : "Add folder"}
               </Button>
             </div>
-          ) : gallery.length === 0 ? (
-            <div className="mx-auto mt-16 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-border bg-card px-8 py-12 text-center shadow-sm">
-              <h2 className="text-lg font-semibold">
-                Nothing tagged {selectedTag}
-              </h2>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                No {categoryLabel(selectedCategory)} files use this tag.
-              </p>
-            </div>
           ) : (
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {gallery.map((entry) => (
-                <MediaCard
-                  key={entry.key}
-                  title={entry.title}
-                  items={entry.items}
-                  grouped={entry.grouped}
-                  onSelect={() =>
-                    setOpenIds(entry.items.map((item) => item.id))
-                  }
-                />
-              ))}
+            <div>
+              {gridState === "no-matches" ? (
+                <p data-testid="no-matches" className="mb-4 text-sm text-muted-foreground">
+                  No matches
+                </p>
+              ) : null}
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {gallery.map((entry) => (
+                  <MediaCard
+                    key={entry.key}
+                    title={entry.title}
+                    items={entry.items}
+                    grouped={entry.grouped}
+                    onSelect={() =>
+                      setOpenIds(entry.items.map((item) => item.id))
+                    }
+                  />
+                ))}
+              </div>
             </div>
           )}
         </section>
