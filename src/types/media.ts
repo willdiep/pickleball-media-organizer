@@ -41,8 +41,16 @@ export interface MediaListResponse {
   tags: Tag[];
 }
 
+export interface IngestProgress {
+  scanned: number;
+  imported: number;
+  alreadyPresent: number;
+  skipped: number;
+}
+
 export interface AddFolderResponse {
   imported: number;
+  alreadyPresent: number;
   skipped: number;
   media?: NormalizedMedia[];
   tags?: Tag[];

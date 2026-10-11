@@ -47,11 +47,12 @@ export async function addFolder(
     title: `Add ${categoryLabel(category)} folder`,
   });
   if (typeof selected !== "string") {
-    return { imported: 0, skipped: 0 };
+    return { imported: 0, alreadyPresent: 0, skipped: 0 };
   }
 
   const result = await invoke<{
     imported: number;
+    alreadyPresent: number;
     skipped: number;
     media: MediaRow[];
     tags: Tag[];
@@ -59,6 +60,7 @@ export async function addFolder(
 
   return {
     imported: result.imported,
+    alreadyPresent: result.alreadyPresent,
     skipped: result.skipped,
     media: result.media.map(withFileUrl),
     tags: result.tags,
