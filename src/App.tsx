@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { FolderPlus, Loader2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import AppMenuModal from "@/components/AppMenuModal";
 import MediaCard from "@/components/MediaCard";
@@ -11,7 +11,7 @@ import { categoryLabel, type MediaCategory } from "@/lib/categories";
 import { buildGalleryEntries } from "@/lib/gallery";
 import * as mediaApi from "@/lib/media-api";
 
-import type { NormalizedMedia, Tag } from "./types/media";
+import type { IngestProgress, NormalizedMedia, Tag } from "./types/media";
 
 const App = () => {
   const [media, setMedia] = useState<NormalizedMedia[]>([]);
@@ -22,8 +22,11 @@ const App = () => {
   const [openIds, setOpenIds] = useState<number[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
+  const [importScanned, setImportScanned] = useState(0);
+  const [importSummary, setImportSummary] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [appMenuOpen, setAppMenuOpen] = useState(false);
+  const addingRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -122,17 +125,33 @@ const App = () => {
   };
 
   const handleAddFolder = async () => {
+    if (addingRef.current) return;
+    addingRef.current = true;
     const category = selectedCategory;
     setIsAdding(true);
+    setImportSummary(null);
+    setImportScanned(0);
+    let unlisten = () => {};
     try {
+      unlisten = await listen<IngestProgress>("ingest-progress", (event) => {
+        setImportScanned(event.payload.scanned);
+      });
       const result = await mediaApi.addFolder(category);
-      if (result.media) {
-        setMedia(result.media);
-        setTags(result.tags || tags);
+      if (!result.media) return;
+      setMedia(result.media);
+      setTags(result.tags || tags);
+      setLoadError(null);
+      const parts = [`Added ${result.imported}`];
+      if (result.alreadyPresent) {
+        parts.push(`${result.alreadyPresent} already in the library`);
       }
+      if (result.skipped) parts.push(`skipped ${result.skipped}`);
+      setImportSummary(parts.join(", "));
     } catch (error) {
-      console.error("Failed to add folder", error);
+      setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
+      unlisten();
+      addingRef.current = false;
       setIsAdding(false);
     }
   };
@@ -205,14 +224,23 @@ const App = () => {
             <h1 className="text-2xl font-semibold tracking-tight">
               {categoryLabel(selectedCategory)}
             </h1>
-            {loadError ? (
+            {isAdding ? (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Importing… {importScanned} files
+              </p>
+            ) : loadError ? (
               <p className="mt-1 text-sm text-destructive">{loadError}</p>
             ) : (
-              <p className="mt-1 text-sm text-muted-foreground">
-                {isLoading
-                  ? "Loading the court…"
-                  : `${visibleCount} ${visibleCount === 1 ? "file" : "files"}`}
-              </p>
+              <>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {isLoading
+                    ? "Loading the court…"
+                    : `${visibleCount} ${visibleCount === 1 ? "file" : "files"}`}
+                </p>
+                {importSummary ? (
+                  <p className="mt-1 text-sm text-muted-foreground">{importSummary}</p>
+                ) : null}
+              </>
             )}
           </div>
           <Button onClick={() => void handleAddFolder()} disabled={isAdding}>

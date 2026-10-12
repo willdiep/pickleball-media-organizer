@@ -2,18 +2,14 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rusqlite::Connection;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{self, IngestPayload, LibraryPayload, MediaRecord, TagRecord};
 use crate::media_server::MediaServer;
 
 pub struct Db(pub Mutex<Connection>);
 
-fn allow_directory(
-    app: &AppHandle,
-    media: &MediaServer,
-    directory: &Path,
-) -> Result<(), String> {
+fn allow_directory(app: &AppHandle, media: &MediaServer, directory: &Path) -> Result<(), String> {
     media.allow_directory(directory);
     if !directory.exists() {
         return Ok(());
@@ -67,13 +63,18 @@ pub fn ingest_folder(
 ) -> Result<IngestPayload, String> {
     let path = Path::new(&directory);
     allow_directory(&app, &media, path)?;
-    let (imported, skipped, library) = with_db(&db, |conn| {
-        let (imported, skipped) = db::ingest_directory(conn, path, &category)?;
+    let progress_app = app.clone();
+    let (imported, already_present, skipped, library) = with_db(&db, |conn| {
+        let (imported, already_present, skipped) =
+            db::ingest_directory(conn, path, &category, |progress| {
+                let _ = progress_app.emit("ingest-progress", progress);
+            })?;
         let library = db::list_library(conn)?;
-        Ok((imported, skipped, library))
+        Ok((imported, already_present, skipped, library))
     })?;
     Ok(IngestPayload {
         imported,
+        already_present,
         skipped,
         media: library.media,
         tags: library.tags,

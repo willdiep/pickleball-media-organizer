@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -41,9 +41,19 @@ pub struct LibraryPayload {
 #[serde(rename_all = "camelCase")]
 pub struct IngestPayload {
     pub imported: i64,
+    pub already_present: i64,
     pub skipped: i64,
     pub media: Vec<MediaRecord>,
     pub tags: Vec<TagRecord>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestProgress {
+    pub scanned: u64,
+    pub imported: u64,
+    pub already_present: u64,
+    pub skipped: u64,
 }
 
 pub fn database_file() -> PathBuf {
@@ -201,7 +211,8 @@ pub fn ingest_directory(
     conn: &Connection,
     directory: &Path,
     category: &str,
-) -> rusqlite::Result<(i64, i64)> {
+    mut on_progress: impl FnMut(IngestProgress),
+) -> rusqlite::Result<(i64, i64, i64)> {
     if !directory.is_dir() {
         return Err(rusqlite::Error::InvalidParameterName(format!(
             "Not a directory: {}",
@@ -211,22 +222,47 @@ pub fn ingest_directory(
     let category = require_category(category)?;
 
     let mut imported = 0_i64;
+    let mut already_present = 0_i64;
     let mut skipped = 0_i64;
+    let mut scanned = 0_u64;
     let tx = conn.unchecked_transaction()?;
     for entry in WalkDir::new(directory).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file() {
             continue;
         }
+        scanned += 1;
         let path = entry.path();
         let Some(mediatype) = infer_media_type(path) else {
             skipped += 1;
+            report_scan(
+                &mut on_progress,
+                scanned,
+                imported,
+                already_present,
+                skipped,
+            );
             continue;
         };
         let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
             skipped += 1;
+            report_scan(
+                &mut on_progress,
+                scanned,
+                imported,
+                already_present,
+                skipped,
+            );
             continue;
         };
         let filepath = path.to_string_lossy().to_string();
+        let existed: bool = tx
+            .query_row(
+                "SELECT 1 FROM Media WHERE filepath = ?1",
+                [&filepath],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
         let group_path =
             group_path_for(directory, path).map(|group| group.to_string_lossy().into_owned());
         tx.execute(
@@ -245,10 +281,45 @@ pub fn ingest_directory(
         // A conflicting filepath keeps its tags and description. group_path and
         // category are refreshed so importing the same folder again can attach
         // grouping and file it under the selected library.
-        imported += 1;
+        if existed {
+            already_present += 1;
+        } else {
+            imported += 1;
+        }
+        report_scan(
+            &mut on_progress,
+            scanned,
+            imported,
+            already_present,
+            skipped,
+        );
     }
     tx.commit()?;
-    Ok((imported, skipped))
+    on_progress(IngestProgress {
+        scanned,
+        imported: imported as u64,
+        already_present: already_present as u64,
+        skipped: skipped as u64,
+    });
+    Ok((imported, already_present, skipped))
+}
+
+fn report_scan(
+    on_progress: &mut impl FnMut(IngestProgress),
+    scanned: u64,
+    imported: i64,
+    already_present: i64,
+    skipped: i64,
+) {
+    if scanned % 25 != 0 {
+        return;
+    }
+    on_progress(IngestProgress {
+        scanned,
+        imported: imported as u64,
+        already_present: already_present as u64,
+        skipped: skipped as u64,
+    });
 }
 
 pub fn stored_directories(conn: &Connection) -> rusqlite::Result<Vec<PathBuf>> {
@@ -447,9 +518,17 @@ mod tests {
         )
         .unwrap();
 
-        let (imported, skipped) = ingest_directory(&conn, &root, "pickleball").unwrap();
-        assert_eq!(imported, 4);
+        let mut progress = Vec::new();
+        let (imported, already_present, skipped) =
+            ingest_directory(&conn, &root, "pickleball", |event| progress.push(event)).unwrap();
+        assert_eq!(imported, 3);
+        assert_eq!(already_present, 1);
         assert_eq!(skipped, 1);
+        let last = progress.last().expect("final progress");
+        assert_eq!(last.scanned, 5);
+        assert_eq!(last.imported, 3);
+        assert_eq!(last.already_present, 1);
+        assert_eq!(last.skipped, 1);
 
         let media = load_media(&conn).unwrap();
         assert_eq!(media.len(), 4);
@@ -486,8 +565,10 @@ mod tests {
         assert!(media.iter().all(|item| item.filename != "notes.txt"));
         assert!(media.iter().all(|item| item.category == "pickleball"));
 
-        let (imported_again, skipped_again) = ingest_directory(&conn, &root, "pickleball").unwrap();
-        assert_eq!(imported_again, 4);
+        let (imported_again, already_again, skipped_again) =
+            ingest_directory(&conn, &root, "pickleball", |_| {}).unwrap();
+        assert_eq!(imported_again, 0);
+        assert_eq!(already_again, 4);
         assert_eq!(skipped_again, 1);
         let again = load_media(&conn).unwrap();
         assert_eq!(again.len(), 4);
@@ -548,10 +629,14 @@ mod tests {
         )
         .unwrap();
 
-        let (pickleball_imported, _) = ingest_directory(&conn, &pickleball, "pickleball").unwrap();
-        let (exercises_imported, _) = ingest_directory(&conn, &exercises, "exercises").unwrap();
+        let (pickleball_imported, pickleball_present, _) =
+            ingest_directory(&conn, &pickleball, "pickleball", |_| {}).unwrap();
+        let (exercises_imported, exercises_present, _) =
+            ingest_directory(&conn, &exercises, "exercises", |_| {}).unwrap();
         assert_eq!(pickleball_imported, 1);
-        assert_eq!(exercises_imported, 1);
+        assert_eq!(pickleball_present, 0);
+        assert_eq!(exercises_imported, 0);
+        assert_eq!(exercises_present, 1);
 
         let media = load_media(&conn).unwrap();
         assert_eq!(media.len(), 2);
@@ -568,7 +653,7 @@ mod tests {
             Some("keep me")
         );
 
-        ingest_directory(&conn, &exercises, "pickleball").unwrap();
+        ingest_directory(&conn, &exercises, "pickleball", |_| {}).unwrap();
         let moved = load_media(&conn).unwrap();
         assert_eq!(moved.len(), 2);
         assert_eq!(
@@ -589,8 +674,41 @@ mod tests {
             Some("keep me")
         );
 
-        let err = ingest_directory(&conn, &pickleball, "tennis").unwrap_err();
+        let err = ingest_directory(&conn, &pickleball, "tennis", |_| {}).unwrap_err();
         assert!(err.to_string().contains("Unknown category"));
+    }
+
+    #[test]
+    fn ingest_emits_progress_every_25_files() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let root = std::env::temp_dir().join(format!("pickleball-progress-{}", Uuid::new_v4()));
+        let cleanup = root.clone();
+        let _guard = scopeguard(&cleanup);
+        fs::create_dir_all(&root).unwrap();
+        for index in 0..25 {
+            fs::write(root.join(format!("clip-{index}.png")), b"png").unwrap();
+        }
+        fs::write(root.join("notes.txt"), b"skip").unwrap();
+
+        let mut progress = Vec::new();
+        let (imported, already_present, skipped) =
+            ingest_directory(&conn, &root, "pickleball", |event| progress.push(event)).unwrap();
+        assert_eq!(imported, 25);
+        assert_eq!(already_present, 0);
+        assert_eq!(skipped, 1);
+        assert!(
+            progress.len() >= 2,
+            "expected a mid-walk event and a final event, got {}",
+            progress.len()
+        );
+        assert_eq!(progress[0].scanned, 25);
+        let last = progress.last().unwrap();
+        assert_eq!(last.scanned, 26);
+        assert_eq!(last.imported, 25);
+        assert_eq!(last.skipped, 1);
     }
 
     fn scopeguard(path: &Path) -> impl Drop {
