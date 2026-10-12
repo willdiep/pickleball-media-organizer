@@ -1,5 +1,7 @@
 // Media types aligned with Prisma schema
 
+import type { MediaCategory } from "@/lib/categories";
+
 export type MediaType = 'VIDEO' | 'PHOTO';
 
 export interface Tag {
@@ -21,6 +23,7 @@ export interface Media {
   mediatype: MediaType;
   description: string | null;
   groupPath: string | null;
+  category: MediaCategory;
   createdAt: Date;
   updatedAt: Date;
   tags: MediaTag[];

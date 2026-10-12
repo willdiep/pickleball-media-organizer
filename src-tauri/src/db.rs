@@ -24,6 +24,7 @@ pub struct MediaRecord {
     pub mediatype: String,
     pub description: Option<String>,
     pub group_path: Option<String>,
+    pub category: String,
     pub created_at: String,
     pub updated_at: String,
     pub tags: Vec<TagRecord>,
@@ -93,6 +94,15 @@ fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     if group_path_exists == 0 {
         conn.execute_batch(include_str!("../migrations/003_group_path.sql"))?;
+    }
+
+    let category_exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('Media') WHERE name = 'category'",
+        [],
+        |row| row.get(0),
+    )?;
+    if category_exists == 0 {
+        conn.execute_batch(include_str!("../migrations/004_category.sql"))?;
     }
     Ok(())
 }
@@ -187,13 +197,18 @@ pub fn delete_all_media(conn: &Connection) -> rusqlite::Result<LibraryPayload> {
     list_library(conn)
 }
 
-pub fn ingest_directory(conn: &Connection, directory: &Path) -> rusqlite::Result<(i64, i64)> {
+pub fn ingest_directory(
+    conn: &Connection,
+    directory: &Path,
+    category: &str,
+) -> rusqlite::Result<(i64, i64)> {
     if !directory.is_dir() {
         return Err(rusqlite::Error::InvalidParameterName(format!(
             "Not a directory: {}",
             directory.display()
         )));
     }
+    let category = require_category(category)?;
 
     let mut imported = 0_i64;
     let mut skipped = 0_i64;
@@ -215,19 +230,21 @@ pub fn ingest_directory(conn: &Connection, directory: &Path) -> rusqlite::Result
         let group_path =
             group_path_for(directory, path).map(|group| group.to_string_lossy().into_owned());
         tx.execute(
-            "INSERT INTO Media (uuid, filename, filepath, mediatype, group_path, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))
-             ON CONFLICT(filepath) DO UPDATE SET group_path = excluded.group_path",
+            "INSERT INTO Media (uuid, filename, filepath, mediatype, group_path, category, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
+             ON CONFLICT(filepath) DO UPDATE SET group_path = excluded.group_path, category = excluded.category",
             params![
                 Uuid::new_v4().to_string(),
                 filename,
                 filepath,
                 mediatype,
-                group_path
+                group_path,
+                category
             ],
         )?;
-        // A conflicting filepath keeps its tags and description. Only group_path
-        // is refreshed so importing the same folder again can attach grouping.
+        // A conflicting filepath keeps its tags and description. group_path and
+        // category are refreshed so importing the same folder again can attach
+        // grouping and file it under the selected library.
         imported += 1;
     }
     tx.commit()?;
@@ -254,7 +271,7 @@ pub fn stored_directories(conn: &Connection) -> rusqlite::Result<Vec<PathBuf>> {
 
 fn load_media(conn: &Connection) -> rusqlite::Result<Vec<MediaRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, uuid, filename, filepath, mediatype, description, created_at, updated_at, group_path
+        "SELECT id, uuid, filename, filepath, mediatype, description, created_at, updated_at, group_path, category
          FROM Media
          ORDER BY
            CASE typeof(created_at)
@@ -273,6 +290,7 @@ fn load_media(conn: &Connection) -> rusqlite::Result<Vec<MediaRecord>> {
             mediatype: row.get(4)?,
             description: row.get(5)?,
             group_path: row.get(8)?,
+            category: row.get(9)?,
             created_at: read_timestamp(row, 6)?,
             updated_at: read_timestamp(row, 7)?,
             tags: Vec::new(),
@@ -340,6 +358,16 @@ fn group_path_for(root: &Path, file: &Path) -> Option<PathBuf> {
     }
 }
 
+fn require_category(category: &str) -> rusqlite::Result<&'static str> {
+    match category {
+        "pickleball" => Ok("pickleball"),
+        "exercises" => Ok("exercises"),
+        other => Err(rusqlite::Error::InvalidParameterName(format!(
+            "Unknown category: {other}"
+        ))),
+    }
+}
+
 fn infer_media_type(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -362,6 +390,8 @@ mod tests {
         conn.execute_batch(include_str!("../migrations/002_description.sql"))
             .unwrap();
         conn.execute_batch(include_str!("../migrations/003_group_path.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("../migrations/004_category.sql"))
             .unwrap();
         conn.execute(
             "INSERT INTO Media (uuid, filename, filepath, mediatype, created_at, updated_at, description)
@@ -417,7 +447,7 @@ mod tests {
         )
         .unwrap();
 
-        let (imported, skipped) = ingest_directory(&conn, &root).unwrap();
+        let (imported, skipped) = ingest_directory(&conn, &root, "pickleball").unwrap();
         assert_eq!(imported, 4);
         assert_eq!(skipped, 1);
 
@@ -454,8 +484,9 @@ mod tests {
             Some(rally_b.as_str())
         );
         assert!(media.iter().all(|item| item.filename != "notes.txt"));
+        assert!(media.iter().all(|item| item.category == "pickleball"));
 
-        let (imported_again, skipped_again) = ingest_directory(&conn, &root).unwrap();
+        let (imported_again, skipped_again) = ingest_directory(&conn, &root, "pickleball").unwrap();
         assert_eq!(imported_again, 4);
         assert_eq!(skipped_again, 1);
         let again = load_media(&conn).unwrap();
@@ -469,6 +500,97 @@ mod tests {
                 .as_deref(),
             Some("keep me")
         );
+    }
+
+    #[test]
+    fn existing_media_defaults_to_pickleball() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.execute_batch(include_str!("../migrations/001_init.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("../migrations/002_description.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("../migrations/003_group_path.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO Media (uuid, filename, filepath, mediatype, created_at, updated_at)
+             VALUES ('id-1', 'rally.png', '/tmp/rally.png', 'PHOTO', datetime('now'), datetime('now'))",
+            [],
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+        let media = load_media(&conn).unwrap();
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].category, "pickleball");
+    }
+
+    #[test]
+    fn ingest_files_each_library_separately() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let pickleball = std::env::temp_dir().join(format!("pickleball-lib-{}", Uuid::new_v4()));
+        let exercises = std::env::temp_dir().join(format!("exercises-lib-{}", Uuid::new_v4()));
+        let _pickleball_guard = scopeguard(&pickleball);
+        let _exercises_guard = scopeguard(&exercises);
+        fs::create_dir_all(&pickleball).unwrap();
+        fs::create_dir_all(&exercises).unwrap();
+        fs::write(pickleball.join("rally.png"), b"png").unwrap();
+        let stretch = exercises.join("stretch.png");
+        fs::write(&stretch, b"png").unwrap();
+
+        conn.execute(
+            "INSERT INTO Media (uuid, filename, filepath, mediatype, description, category, created_at, updated_at)
+             VALUES ('keep-stretch', 'stretch.png', ?1, 'PHOTO', 'keep me', 'exercises', datetime('now'), datetime('now'))",
+            [stretch.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        let (pickleball_imported, _) = ingest_directory(&conn, &pickleball, "pickleball").unwrap();
+        let (exercises_imported, _) = ingest_directory(&conn, &exercises, "exercises").unwrap();
+        assert_eq!(pickleball_imported, 1);
+        assert_eq!(exercises_imported, 1);
+
+        let media = load_media(&conn).unwrap();
+        assert_eq!(media.len(), 2);
+        let by_name = |filename: &str| {
+            media
+                .iter()
+                .find(|item| item.filename == filename)
+                .unwrap_or_else(|| panic!("missing {filename}"))
+        };
+        assert_eq!(by_name("rally.png").category, "pickleball");
+        assert_eq!(by_name("stretch.png").category, "exercises");
+        assert_eq!(
+            by_name("stretch.png").description.as_deref(),
+            Some("keep me")
+        );
+
+        ingest_directory(&conn, &exercises, "pickleball").unwrap();
+        let moved = load_media(&conn).unwrap();
+        assert_eq!(moved.len(), 2);
+        assert_eq!(
+            moved
+                .iter()
+                .find(|item| item.filename == "stretch.png")
+                .unwrap()
+                .category,
+            "pickleball"
+        );
+        assert_eq!(
+            moved
+                .iter()
+                .find(|item| item.filename == "stretch.png")
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("keep me")
+        );
+
+        let err = ingest_directory(&conn, &pickleball, "tennis").unwrap_err();
+        assert!(err.to_string().contains("Unknown category"));
     }
 
     fn scopeguard(path: &Path) -> impl Drop {

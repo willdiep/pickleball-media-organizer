@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
+import { categoryLabel, type MediaCategory } from "@/lib/categories";
 import type {
   AddFolderResponse,
   DeleteMediaResponse,
@@ -37,11 +38,13 @@ export async function listMedia(): Promise<MediaListResponse> {
   };
 }
 
-export async function addFolder(): Promise<AddFolderResponse> {
+export async function addFolder(
+  category: MediaCategory
+): Promise<AddFolderResponse> {
   const selected = await open({
     directory: true,
     multiple: false,
-    title: "Add media folder",
+    title: `Add ${categoryLabel(category)} folder`,
   });
   if (typeof selected !== "string") {
     return { imported: 0, skipped: 0 };
@@ -52,7 +55,7 @@ export async function addFolder(): Promise<AddFolderResponse> {
     skipped: number;
     media: MediaRow[];
     tags: Tag[];
-  }>("ingest_folder", { directory: selected });
+  }>("ingest_folder", { directory: selected, category });
 
   return {
     imported: result.imported,

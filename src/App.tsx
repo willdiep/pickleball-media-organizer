@@ -7,6 +7,7 @@ import MediaCard from "@/components/MediaCard";
 import MediaModal from "@/components/MediaModal";
 import Sidebar from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
+import { categoryLabel, type MediaCategory } from "@/lib/categories";
 import { buildGalleryEntries } from "@/lib/gallery";
 import * as mediaApi from "@/lib/media-api";
 
@@ -15,7 +16,9 @@ import type { NormalizedMedia, Tag } from "./types/media";
 const App = () => {
   const [media, setMedia] = useState<NormalizedMedia[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
-  const [selectedTag, setSelectedTag] = useState("all");
+  const [selectedCategory, setSelectedCategory] =
+    useState<MediaCategory>("pickleball");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [openIds, setOpenIds] = useState<number[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
@@ -64,15 +67,20 @@ const App = () => {
     };
   }, []);
 
+  const categoryMedia = useMemo(
+    () => media.filter((item) => item.category === selectedCategory),
+    [media, selectedCategory]
+  );
+
   const gallery = useMemo(() => {
-    const entries = buildGalleryEntries(media);
-    if (selectedTag === "all") return entries;
+    const entries = buildGalleryEntries(categoryMedia);
+    if (!selectedTag) return entries;
     return entries.filter((entry) =>
       entry.items.some((item) =>
         item.tags?.some((itemTag) => itemTag.name === selectedTag)
       )
     );
-  }, [media, selectedTag]);
+  }, [categoryMedia, selectedTag]);
 
   const openItems = useMemo(() => {
     if (!openIds) return [];
@@ -85,20 +93,39 @@ const App = () => {
 
   const visibleCount = gallery.reduce((sum, entry) => sum + entry.items.length, 0);
 
-  const tagCounts = useMemo(() => {
-    const counts = new Map<string, number>();
+  const categoryCounts = useMemo(() => {
+    const counts: Record<MediaCategory, number> = {
+      pickleball: 0,
+      exercises: 0,
+    };
     for (const item of media) {
-      for (const tag of item.tags ?? []) {
-        counts.set(tag.name, (counts.get(tag.name) ?? 0) + 1);
+      if (item.category === "pickleball" || item.category === "exercises") {
+        counts[item.category] += 1;
       }
     }
     return counts;
   }, [media]);
 
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of categoryMedia) {
+      for (const tag of item.tags ?? []) {
+        counts.set(tag.name, (counts.get(tag.name) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [categoryMedia]);
+
+  const handleSelectCategory = (category: MediaCategory) => {
+    setSelectedCategory(category);
+    setSelectedTag(null);
+  };
+
   const handleAddFolder = async () => {
+    const category = selectedCategory;
     setIsAdding(true);
     try {
-      const result = await mediaApi.addFolder();
+      const result = await mediaApi.addFolder(category);
       if (result.media) {
         setMedia(result.media);
         setTags(result.tags || tags);
@@ -141,7 +168,7 @@ const App = () => {
     setMedia(result.media || []);
     setTags(result.tags || []);
     setOpenIds(null);
-    setSelectedTag("all");
+    setSelectedTag(null);
   };
 
   const handleDeleteMedia = async (mediaId: number) => {
@@ -164,16 +191,20 @@ const App = () => {
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <Sidebar
         tags={tags}
+        selectedCategory={selectedCategory}
         selectedTag={selectedTag}
-        totalCount={media.length}
+        categoryCounts={categoryCounts}
         tagCounts={tagCounts}
+        onSelectCategory={handleSelectCategory}
         onSelectTag={setSelectedTag}
       />
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between gap-4 px-8 py-5">
           <div>
-            <p className="text-sm text-muted-foreground">Highlights</p>
-            <h1 className="text-2xl font-semibold tracking-tight">Library</h1>
+            <p className="text-sm text-muted-foreground">Library</p>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              {categoryLabel(selectedCategory)}
+            </h1>
             {loadError ? (
               <p className="mt-1 text-sm text-destructive">{loadError}</p>
             ) : (
@@ -199,20 +230,38 @@ const App = () => {
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Loading media
             </div>
-          ) : gallery.length === 0 ? (
+          ) : categoryMedia.length === 0 ? (
             <div className="mx-auto mt-16 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-border bg-card px-8 py-12 text-center shadow-sm">
               <span className="grid h-14 w-14 place-items-center rounded-full bg-ball">
                 <span className="h-4 w-4 rounded-full bg-court" />
               </span>
-              <h2 className="mt-5 text-lg font-semibold">No highlights yet</h2>
+              <h2 className="mt-5 text-lg font-semibold">
+                No {categoryLabel(selectedCategory)} media yet
+              </h2>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                Add a folder of photos and videos. Subfolders become their own
-                carousel, and files in the root stay as single clips.
+                {`Add a folder of photos and videos for ${categoryLabel(selectedCategory)}. Subfolders become their own carousel, and files in the root stay as single clips.`}
               </p>
-              <Button className="mt-6" onClick={() => void handleAddFolder()}>
-                <FolderPlus />
-                Add folder
+              <Button
+                className="mt-6"
+                onClick={() => void handleAddFolder()}
+                disabled={isAdding}
+              >
+                {isAdding ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <FolderPlus />
+                )}
+                {isAdding ? "Importing" : "Add folder"}
               </Button>
+            </div>
+          ) : gallery.length === 0 ? (
+            <div className="mx-auto mt-16 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-border bg-card px-8 py-12 text-center shadow-sm">
+              <h2 className="text-lg font-semibold">
+                Nothing tagged {selectedTag}
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                No {categoryLabel(selectedCategory)} files use this tag.
+              </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

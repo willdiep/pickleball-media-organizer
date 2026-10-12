@@ -63,11 +63,12 @@ pub fn ingest_folder(
     media: State<'_, MediaServer>,
     db: State<'_, Db>,
     directory: String,
+    category: String,
 ) -> Result<IngestPayload, String> {
     let path = Path::new(&directory);
     allow_directory(&app, &media, path)?;
     let (imported, skipped, library) = with_db(&db, |conn| {
-        let (imported, skipped) = db::ingest_directory(conn, path)?;
+        let (imported, skipped) = db::ingest_directory(conn, path, &category)?;
         let library = db::list_library(conn)?;
         Ok((imported, skipped, library))
     })?;
