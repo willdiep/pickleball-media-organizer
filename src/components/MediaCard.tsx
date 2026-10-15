@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import TagBadge from "@/components/TagBadge";
 import { Card, CardDescription, CardTitle } from "@/components/ui/card";
+import { groupCardDescription } from "@/lib/gallery";
 import type { NormalizedMedia } from "@/types/media";
 
 interface MediaCardProps {
@@ -34,12 +35,7 @@ function MediaCard({ title, items, grouped, onSelect }: MediaCardProps) {
   const tagNames = [
     ...new Set(items.flatMap((item) => item.tags?.map((tag) => tag.name) ?? [])),
   ];
-  const rawDescription =
-    grouped && items.length > 1 ? "" : (items[0]?.description ?? "");
-  const description =
-    rawDescription.length >= 100
-      ? `${rawDescription.slice(0, 100)}...`
-      : rawDescription;
+  const description = groupCardDescription(items, grouped);
   const countLabel = items.length === 1 ? "1 item" : `${items.length} items`;
 
   return (
@@ -97,7 +93,9 @@ function MediaCard({ title, items, grouped, onSelect }: MediaCardProps) {
             {title}
           </CardTitle>
           {description ? (
-            <CardDescription className="line-clamp-2">{description}</CardDescription>
+            <CardDescription data-testid="gallery-card-description" className="line-clamp-2">
+              {description}
+            </CardDescription>
           ) : null}
         </div>
         <div className="mt-auto flex flex-wrap gap-1.5">

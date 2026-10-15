@@ -7,7 +7,7 @@ Do the phases in order. Each phase should build and run before the next one star
 | Phase | Theme |
 | --- | --- | --- |
 [X] | 1 | Import is a black box |
-[ ] | 2 | The library cannot stay in sync with disk |
+[X] | 2 | The library cannot stay in sync with disk |
 [ ] | 3 | Finding things stops at one tag |
 [ ] | 4 | Tagging is one item at a time, then the viewer closes |
 [ ] | 5 | Playback is aimed at portrait phone clips |
