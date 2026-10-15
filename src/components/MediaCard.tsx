@@ -20,7 +20,17 @@ function fileSrc(item: NormalizedMedia): string {
 }
 
 function MediaCard({ title, items, grouped, onSelect }: MediaCardProps) {
-  const preview = items.find((item) => item.mediatype === "PHOTO") ?? items[0];
+  const preview =
+    items.find(
+      (item) =>
+        item.mediatype === "PHOTO" && !item.fileMissing && !item.previewUnavailable
+    ) ??
+    items.find((item) => !item.fileMissing && !item.previewUnavailable) ??
+    items.find((item) => item.mediatype === "PHOTO") ??
+    items[0];
+  const previewBlocked = Boolean(
+    preview?.fileMissing || preview?.previewUnavailable
+  );
   const tagNames = [
     ...new Set(items.flatMap((item) => item.tags?.map((tag) => tag.name) ?? [])),
   ];
@@ -40,9 +50,25 @@ function MediaCard({ title, items, grouped, onSelect }: MediaCardProps) {
       onClick={onSelect}
     >
       <div className="relative aspect-[4/3] w-full overflow-hidden bg-court/10">
-        {preview ? <MediaPreview item={preview} title={title} /> : null}
+        {preview && !previewBlocked ? (
+          <MediaPreview item={preview} title={title} />
+        ) : null}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-16 bg-gradient-to-t from-court/50 to-transparent" />
-        {grouped ? (
+        {preview?.fileMissing ? (
+          <span
+            data-testid="file-missing"
+            className="absolute right-3 top-3 z-10 inline-flex items-center rounded-full bg-court/80 px-2.5 py-1 text-xs font-medium text-court-foreground"
+          >
+            File missing
+          </span>
+        ) : preview?.previewUnavailable ? (
+          <span
+            data-testid="preview-unavailable"
+            className="absolute right-3 top-3 z-10 inline-flex items-center rounded-full bg-court/80 px-2.5 py-1 text-xs font-medium text-court-foreground"
+          >
+            Preview unavailable
+          </span>
+        ) : grouped ? (
           <span
             data-testid="group-count"
             className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-full bg-ball px-2.5 py-1 text-xs font-semibold text-ball-foreground shadow-sm"

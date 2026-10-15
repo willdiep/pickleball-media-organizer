@@ -27,6 +27,8 @@ uuid = { version = "1.26.1", features = ["v4"] }
 walkdir = "2"
 tauri-plugin-dialog = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+notify = "8.2.0"
+tauri-plugin-opener = "2.7.1"
 
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 gtk = "0.18.2"

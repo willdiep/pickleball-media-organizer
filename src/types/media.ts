@@ -24,6 +24,11 @@ export interface Media {
   description: string | null;
   groupPath: string | null;
   category: MediaCategory;
+  rootId: number | null;
+  fileModifiedAt: string | null;
+  fileMissing: boolean;
+  previewPath: string | null;
+  previewUnavailable: boolean;
   createdAt: Date;
   updatedAt: Date;
   tags: MediaTag[];
@@ -36,9 +41,16 @@ export interface NormalizedMedia extends Omit<Media, 'tags'> {
 }
 
 // IPC response types
+export interface LibraryRoot {
+  id: number;
+  path: string;
+  mediaCount: number;
+}
+
 export interface MediaListResponse {
   media: NormalizedMedia[];
   tags: Tag[];
+  roots: LibraryRoot[];
 }
 
 export interface IngestProgress {
@@ -52,8 +64,10 @@ export interface AddFolderResponse {
   imported: number;
   alreadyPresent: number;
   skipped: number;
+  missing?: number;
   media?: NormalizedMedia[];
   tags?: Tag[];
+  roots?: LibraryRoot[];
 }
 
 export interface UpdateTagsResponse {
@@ -68,4 +82,5 @@ export interface UpdateDescriptionResponse {
 export interface DeleteMediaResponse {
   media: NormalizedMedia[];
   tags: Tag[];
+  roots: LibraryRoot[];
 }

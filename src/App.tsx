@@ -8,16 +8,24 @@ import MediaModal from "@/components/MediaModal";
 import Sidebar from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { categoryLabel, type MediaCategory } from "@/lib/categories";
-import { buildGalleryEntries } from "@/lib/gallery";
+import { buildGalleryEntries, folderName } from "@/lib/gallery";
 import * as mediaApi from "@/lib/media-api";
 
-import type { IngestProgress, NormalizedMedia, Tag } from "./types/media";
+import type {
+  AddFolderResponse,
+  IngestProgress,
+  LibraryRoot,
+  NormalizedMedia,
+  Tag,
+} from "./types/media";
 
 const App = () => {
   const [media, setMedia] = useState<NormalizedMedia[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedCategory, setSelectedCategory] =
     useState<MediaCategory>("pickleball");
+  const [roots, setRoots] = useState<LibraryRoot[]>([]);
+  const [diskChange, setDiskChange] = useState<LibraryRoot | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [openIds, setOpenIds] = useState<number[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -38,6 +46,7 @@ const App = () => {
         if (!active) return;
         setMedia(result.media || []);
         setTags(result.tags || []);
+        setRoots(result.roots || []);
       } catch (error) {
         console.error("Failed to load media", error);
         if (!active) return;
@@ -58,15 +67,35 @@ const App = () => {
     };
     window.addEventListener("keydown", handleKeyDown);
 
-    let unlisten: (() => void) | undefined;
+    const stops: Array<() => void> = [];
     void listen("app-menu", openAppMenu).then((stop) => {
-      unlisten = stop;
+      if (!active) {
+        stop();
+        return;
+      }
+      stops.push(stop);
+    });
+    void listen<{ rootId: number; path: string }>(
+      "library-root-changed",
+      (event) => {
+        setDiskChange({
+          id: event.payload.rootId,
+          path: event.payload.path,
+          mediaCount: 0,
+        });
+      }
+    ).then((stop) => {
+      if (!active) {
+        stop();
+        return;
+      }
+      stops.push(stop);
     });
 
     return () => {
       active = false;
       window.removeEventListener("keydown", handleKeyDown);
-      unlisten?.();
+      for (const stop of stops) stop();
     };
   }, []);
 
@@ -124,10 +153,32 @@ const App = () => {
     setSelectedTag(null);
   };
 
-  const handleAddFolder = async () => {
+  const applyLibrary = (
+    nextMedia: NormalizedMedia[],
+    nextTags: Tag[],
+    nextRoots?: LibraryRoot[]
+  ) => {
+    setMedia(nextMedia);
+    setTags(nextTags);
+    if (nextRoots) setRoots(nextRoots);
+    setSelectedTag((current) =>
+      current && !nextTags.some((tag) => tag.name === current) ? null : current
+    );
+  };
+
+  const summarizeImport = (result: AddFolderResponse) => {
+    const parts = [`Added ${result.imported}`];
+    if (result.alreadyPresent) {
+      parts.push(`${result.alreadyPresent} already in the library`);
+    }
+    if (result.skipped) parts.push(`skipped ${result.skipped}`);
+    if (result.missing) parts.push(`${result.missing} no longer on disk`);
+    return parts.join(", ");
+  };
+
+  const runImport = async (action: () => Promise<AddFolderResponse>) => {
     if (addingRef.current) return;
     addingRef.current = true;
-    const category = selectedCategory;
     setIsAdding(true);
     setImportSummary(null);
     setImportScanned(0);
@@ -136,17 +187,12 @@ const App = () => {
       unlisten = await listen<IngestProgress>("ingest-progress", (event) => {
         setImportScanned(event.payload.scanned);
       });
-      const result = await mediaApi.addFolder(category);
+      const result = await action();
       if (!result.media) return;
-      setMedia(result.media);
-      setTags(result.tags || tags);
+      applyLibrary(result.media, result.tags || tags, result.roots);
       setLoadError(null);
-      const parts = [`Added ${result.imported}`];
-      if (result.alreadyPresent) {
-        parts.push(`${result.alreadyPresent} already in the library`);
-      }
-      if (result.skipped) parts.push(`skipped ${result.skipped}`);
-      setImportSummary(parts.join(", "));
+      setImportSummary(summarizeImport(result));
+      setDiskChange(null);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -154,6 +200,21 @@ const App = () => {
       addingRef.current = false;
       setIsAdding(false);
     }
+  };
+
+  const handleAddFolder = async () => {
+    const category = selectedCategory;
+    await runImport(() => mediaApi.addFolder(category));
+  };
+
+  const handleRescan = async (rootId: number) => {
+    await runImport(() => mediaApi.rescanRoot(rootId));
+  };
+
+  const handleRemoveRoot = async (rootId: number) => {
+    const result = await mediaApi.removeRoot(rootId);
+    applyLibrary(result.media || [], result.tags || [], result.roots);
+    setDiskChange((current) => (current?.id === rootId ? null : current));
   };
 
   const handleSaveMetadata = async (
@@ -184,17 +245,18 @@ const App = () => {
 
   const handleDeleteAllMedia = async () => {
     const result = await mediaApi.deleteAllMedia();
-    setMedia(result.media || []);
-    setTags(result.tags || []);
+    applyLibrary(result.media || [], result.tags || [], result.roots);
     setOpenIds(null);
     setSelectedTag(null);
+    setDiskChange(null);
   };
 
   const handleDeleteMedia = async (mediaId: number) => {
     try {
       const result = await mediaApi.deleteMedia(mediaId);
-      if (result?.media) setMedia(result.media);
-      if (result?.tags) setTags(result.tags);
+      if (result?.media && result.tags) {
+        applyLibrary(result.media, result.tags, result.roots);
+      }
       setOpenIds((ids) => {
         if (!ids) return null;
         const next = ids.filter((id) => id !== mediaId);
@@ -242,6 +304,21 @@ const App = () => {
                 ) : null}
               </>
             )}
+            {diskChange && !isAdding ? (
+              <div
+                data-testid="disk-change"
+                className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted-foreground"
+              >
+                <span>{folderName(diskChange.path)} changed on disk.</span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void handleRescan(diskChange.id)}
+                >
+                  Rescan
+                </Button>
+              </div>
+            ) : null}
           </div>
           <Button onClick={() => void handleAddFolder()} disabled={isAdding}>
             {isAdding ? (
@@ -310,8 +387,12 @@ const App = () => {
       </main>
       {appMenuOpen ? (
         <AppMenuModal
+          roots={roots}
+          busy={isAdding}
           onClose={() => setAppMenuOpen(false)}
           onDeleteAll={handleDeleteAllMedia}
+          onRescan={handleRescan}
+          onRemove={handleRemoveRoot}
         />
       ) : null}
       {openItems.length > 0 ? (

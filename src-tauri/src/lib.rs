@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod media_server;
+mod watcher;
 
 use std::sync::Mutex;
 
@@ -13,6 +14,7 @@ use commands::Db;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -41,8 +43,19 @@ pub fn run() {
 
             let media = media_server::start().map_err(setup_error)?;
             let conn = db::open_database().map_err(setup_error)?;
-            commands::allow_stored_directories(app.handle(), &media, &conn)
-                .map_err(setup_error)?;
+            commands::allow_stored_directories(app.handle(), &media, &conn).map_err(setup_error)?;
+            let folder_watcher = watcher::RootWatcher::start({
+                let handle = app.handle().clone();
+                move |root_id, path| {
+                    let _ = handle.emit(
+                        "library-root-changed",
+                        watcher::RootChanged { root_id, path },
+                    );
+                }
+            })
+            .map_err(setup_error)?;
+            folder_watcher.sync(&conn).map_err(setup_error)?;
+            app.manage(folder_watcher);
             app.manage(media);
             app.manage(Db(Mutex::new(conn)));
             Ok(())
@@ -50,8 +63,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_media,
             commands::list_tags,
+            commands::list_roots,
             commands::get_media,
             commands::ingest_folder,
+            commands::rescan_root,
+            commands::remove_root,
+            commands::reveal_media,
             commands::update_tags,
             commands::update_description,
             commands::delete_media,

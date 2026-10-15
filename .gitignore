@@ -7,3 +7,4 @@ dist-main
 .env
 data/*.db
 data/*.db-journal
+data/previews/

@@ -12,8 +12,8 @@ export function folderName(groupPath: string): string {
   return parts[parts.length - 1] ?? groupPath;
 }
 
-function createdMillis(
-  value: NormalizedMedia["createdAt"] | string | number
+function timestampMillis(
+  value: NormalizedMedia["createdAt"] | string | number | null | undefined
 ): number {
   if (value instanceof Date) return value.getTime();
   if (typeof value === "number") return value;
@@ -25,6 +25,20 @@ function createdMillis(
   const normalized = text.includes("T") ? text : `${text.replace(" ", "T")}Z`;
   const parsed = Date.parse(normalized);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+export function librarySortMillis(item: NormalizedMedia): number {
+  if (item.fileModifiedAt) {
+    const parsed = timestampMillis(item.fileModifiedAt);
+    if (parsed > 0) return parsed;
+  }
+  return timestampMillis(item.createdAt);
+}
+
+export function formatLibraryTime(value: string): string {
+  const parsed = timestampMillis(value);
+  if (!parsed) return value;
+  return new Date(parsed).toLocaleString();
 }
 
 function byFilename(a: NormalizedMedia, b: NormalizedMedia): number {
@@ -69,12 +83,8 @@ export function buildGalleryEntries(media: NormalizedMedia[]): GalleryEntry[] {
   }
 
   entries.sort((a, b) => {
-    const aTime = Math.max(
-      ...a.items.map((item) => createdMillis(item.createdAt))
-    );
-    const bTime = Math.max(
-      ...b.items.map((item) => createdMillis(item.createdAt))
-    );
+    const aTime = Math.max(...a.items.map((item) => librarySortMillis(item)));
+    const bTime = Math.max(...b.items.map((item) => librarySortMillis(item)));
     return bTime - aTime || a.title.localeCompare(b.title);
   });
 

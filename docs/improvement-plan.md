@@ -5,17 +5,17 @@ Step-by-step plan for the ten UI and functionality themes from the review of Pic
 Do the phases in order. Each phase should build and run before the next one starts. Do not land all ten in a single change.
 
 | Phase | Theme |
-| --- | --- |
-| 1 | Import is a black box |
-| 2 | The library cannot stay in sync with disk |
-| 3 | Finding things stops at one tag |
-| 4 | Tagging is one item at a time, then the viewer closes |
-| 5 | Playback is aimed at portrait phone clips |
-| 6 | Delete is the whole settings menu |
-| 7 | The empty state lies when a filter matches nothing |
-| 8 | The grid is mouse-only |
-| 9 | The viewer is dense in the wrong places |
-| 10 | The shell does not adapt |
+| --- | --- | --- |
+[X] | 1 | Import is a black box |
+[ ] | 2 | The library cannot stay in sync with disk |
+[ ] | 3 | Finding things stops at one tag |
+[ ] | 4 | Tagging is one item at a time, then the viewer closes |
+[ ] | 5 | Playback is aimed at portrait phone clips |
+[ ] | 6 | Delete is the whole settings menu |
+[ ] | 7 | The empty state lies when a filter matches nothing |
+[ ] | 8 | The grid is mouse-only |
+[ ] | 9 | The viewer is dense in the wrong places |
+[ ] | 10 | The shell does not adapt |
 
 Phase 3 lands before phase 7, so a search or tag that matches nothing uses a one-line "No matches" message. Phase 7 replaces that line with the two empty cards and the header label. Do not build that header twice.
 
